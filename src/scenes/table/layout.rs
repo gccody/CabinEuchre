@@ -160,8 +160,8 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
                     }
                 }
                 if t.hover == Some(card) {
-                    lift += 10.0;
-                    scale *= 1.06;
+                    lift += 8.0;
+                    scale *= 1.05;
                     rot += ((mouse.x - pos.x) / 22.0).clamp(-1.0, 1.0) * 0.05;
                 }
                 pos.y -= lift;

@@ -26,7 +26,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             volume: 0.8,
-            music: 0.6,
+            music: 0.45,
             crt: 1.0,
             speed: 1,
             stick_the_dealer: true,

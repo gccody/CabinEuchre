@@ -70,9 +70,9 @@ impl Sound {
     fn mix(self) -> (f32, f32) {
         match self {
             Sound::Select => (0.7, 0.04),
-            Sound::Hover => (0.3, 0.10),
+            Sound::Hover => (0.25, 0.10),
             Sound::CardSlide => (0.6, 0.12),
-            Sound::CardPlace => (0.85, 0.08),
+            Sound::CardPlace => (0.7, 0.08),
             Sound::Chips => (0.6, 0.03),
             Sound::Deal => (0.5, 0.15),
             Sound::Flip => (0.55, 0.12),
@@ -228,13 +228,20 @@ fn swish(seconds: f32, gain: f32) -> SoundData {
     })
 }
 
-/// A soft low thump with a click on top: a card hitting the table.
+/// A soft tap on felt: a muted low body under a dull, papery brush.
+/// The short attack ramp and gentle pitch settle keep it from sounding like a kick drum.
 fn thump(seconds: f32) -> SoundData {
     let mut rng = Rng::new(0xca7d);
+    let mut low = 0.0f32;
+    let mut phase = 0.0f32;
     SoundData::generate(RATE, seconds, move |t| {
-        let body = (TAU * (140.0 - t * 600.0).max(60.0) * t).sin() * (-t * 45.0).exp() * 0.5;
-        let click = (rng.random() * 2.0 - 1.0) * (-t * 400.0).exp() * 0.25;
-        body + click
+        let attack = (t * 300.0).min(1.0);
+        phase += (95.0 - t * 150.0).max(80.0) / RATE as f32;
+        let body = (TAU * phase).sin() * (-t * 60.0).exp() * 0.28;
+        let white = rng.random() * 2.0 - 1.0;
+        low += (white - low) * 0.18;
+        let brush = low * (-t * 160.0).exp() * 0.22;
+        (body + brush) * attack
     })
 }
 

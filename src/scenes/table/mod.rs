@@ -539,7 +539,7 @@ impl Table {
                 let n = self.game.round.trick.len() as f32;
                 sfx.play_pitched(Sound::CardPlace, 1.0 + n * 0.03);
                 if seat == HUMAN {
-                    self.sprites[card.id()].scale.impulse(1.5);
+                    self.sprites[card.id()].scale.impulse(1.0);
                 }
             }
         }
