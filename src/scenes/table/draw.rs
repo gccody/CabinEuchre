@@ -397,7 +397,10 @@ impl Table {
         g.push();
         g.translate(pos.x, pos.y);
         g.scale(t.pop.value, t.pop.value);
-        let rect = Rect::centered(0.0, 0.0, 196.0, 46.0);
+        // Suit icon on the left, text in the column to its right; grow to fit the text.
+        let text_w = font.width(&t.title).max(font.width(&t.sub));
+        let rect = Rect::centered(0.0, 0.0, (text_w + 62.0).max(196.0), 46.0);
+        let text_x = (rect.x + 45.0 + rect.x + rect.w - 12.0) / 2.0;
         g.set_color(palette::INK.with_alpha(0.5 * fade));
         g.rounded_rectangle(Fill, rect.x + 2.0, rect.y + 3.0, rect.w, rect.h, 5.0);
         g.set_color(palette::GOLD.with_alpha(fade));
@@ -407,13 +410,13 @@ impl Table {
         let color = crate::cards::suit_color_on_dark(t.suit).with_alpha(fade);
         let wob = (shared.time * 3.0).sin() * 0.08;
         shared.cards.draw_suit(g, t.suit, vec2(rect.x + 22.0, -1.0), 2.0, wob, color);
-        Text::new(&t.title, 12.0, -7.0)
+        Text::new(&t.title, text_x, -7.0)
             .scale(1.0)
             .color(palette::CREAM.with_alpha(fade))
             .wave(shared.time, 1.0)
             .center()
             .draw(g, font);
-        Text::new(&t.sub, 12.0, 9.0).color(palette::GOLD.with_alpha(fade)).center().draw(g, font);
+        Text::new(&t.sub, text_x, 9.0).color(palette::GOLD.with_alpha(fade)).center().draw(g, font);
         g.pop();
     }
 
@@ -434,7 +437,9 @@ impl Table {
         g.translate(c.x, c.y);
         g.scale(b.pop.value, b.pop.value);
         g.translate(-c.x, -c.y);
-        let rect = Rect::centered(c.x, c.y, 260.0, 112.0);
+        // Grow to fit the widest line (the detail names the maker and can run long).
+        let text_w = (font.width(b.title) * 2.5).max(font.width(&b.detail)).max(font.width(&b.points) * 1.5);
+        let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, 470.0), 112.0);
         ui::panel(g, rect, palette::PANEL);
         g.set_color(b.color);
         g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, 4.0, 2.0);

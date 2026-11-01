@@ -131,8 +131,6 @@ pub fn glyph_rows(ch: char) -> Option<&'static [&'static str]> {
 #[derive(Debug, Clone, Copy)]
 struct Glyph {
     quad: Quad,
-    /// Width in font pixels.
-    width: f32,
     /// Atlas texels per font pixel (1 for letters, 2 for the sharper suit symbols).
     density: f32,
     /// Vertical offset in font pixels.
@@ -161,7 +159,7 @@ impl PixelFont {
                 }
             }
             let quad = bordered(x0, y0, w, CELL_H);
-            glyphs.insert(ch, Glyph { quad, width: w as f32, density: 1.0, dy: 0.0 });
+            glyphs.insert(ch, Glyph { quad, density: 1.0, dy: 0.0 });
             x0 += w + GAP;
         }
         for suit in Suit::ALL {
@@ -172,9 +170,8 @@ impl PixelFont {
                     data.set_pixel(x0 + x, y0 + y, Color::WHITE);
                 }
             }
-            let n = SUIT_SIZE as f32;
             let quad = bordered(x0, y0, SUIT_SIZE, SUIT_SIZE);
-            glyphs.insert(suit.symbol(), Glyph { quad, width: n / 2.0, density: 2.0, dy: 1.0 });
+            glyphs.insert(suit.symbol(), Glyph { quad, density: 2.0, dy: 1.0 });
             x0 += SUIT_SIZE + GAP;
         }
         let image = g.new_image_from_data(&data);
@@ -194,32 +191,22 @@ impl PixelFont {
             .copied()
     }
 
-    /// Horizontal advance in font pixels.
-    fn advance(&self, ch: char) -> f32 {
-        match self.glyph(ch) {
-            Some(g) => g.width + 1.0,
-            None => SPACE_WIDTH + 1.0,
-        }
-    }
-
-    /// Width of a single line in font pixels.
     fn raw_line_width(&self, line: &str) -> f32 {
-        let w: f32 = line.chars().map(|c| self.advance(c)).sum();
-        (w - 1.0).max(0.0)
+        raw_line_width(line)
     }
 
     fn raw_width(&self, text: &str) -> f32 {
-        text.lines().map(|l| self.raw_line_width(l)).fold(0.0, f32::max)
+        raw_width(text)
     }
 
     /// Width of a single line at scale 1, in design pixels.
     pub fn line_width(&self, line: &str) -> f32 {
-        self.raw_line_width(line) * UNIT
+        raw_line_width(line) * UNIT
     }
 
     /// Width of the widest line at scale 1, in design pixels.
     pub fn width(&self, text: &str) -> f32 {
-        self.raw_width(text) * UNIT
+        measure(text)
     }
 
     /// Word-wraps `text` so no line is wider than `max_width` (design pixels, scale 1).
@@ -241,6 +228,39 @@ impl PixelFont {
         }
         out
     }
+}
+
+/// Horizontal advance of one character in font pixels. Mirrors the lookup in
+/// `PixelFont::glyph` (exact, then uppercase, then `?`), so text can be measured
+/// without a graphics context (e.g. in tests).
+fn advance(ch: char) -> f32 {
+    if ch == ' ' {
+        return SPACE_WIDTH + 1.0;
+    }
+    if Suit::ALL.iter().any(|s| s.symbol() == ch) {
+        return SUIT_SIZE as f32 / 2.0 + 1.0;
+    }
+    let rows = glyph_rows(ch)
+        .or_else(|| glyph_rows(ch.to_ascii_uppercase()))
+        .or_else(|| glyph_rows('?'))
+        .unwrap_or(&[]);
+    glyph_width(rows) as f32 + 1.0
+}
+
+/// Width of a single line in font pixels.
+fn raw_line_width(line: &str) -> f32 {
+    let w: f32 = line.chars().map(advance).sum();
+    (w - 1.0).max(0.0)
+}
+
+/// Width of the widest line in font pixels.
+fn raw_width(text: &str) -> f32 {
+    text.lines().map(raw_line_width).fold(0.0, f32::max)
+}
+
+/// Width of the widest line of `text` at scale 1, in design pixels.
+pub fn measure(text: &str) -> f32 {
+    raw_width(text) * UNIT
 }
 
 fn glyph_width(rows: &[&str]) -> u32 {
@@ -372,7 +392,7 @@ impl<'a> Text<'a> {
                         .color(color);
                     g.draw_quad_ex(&font.image, glyph.quad, params);
                 }
-                x += font.advance(ch);
+                x += advance(ch);
                 index += 1;
             }
         }
