@@ -1,6 +1,8 @@
 //! Procedural pixel-art playing cards. Every face and the back are painted
-//! into one nearest-filtered atlas at startup (no image files), at canvas
-//! density (1.5 texels per design pixel, see `render::DENSITY`).
+//! into one atlas at startup (no image files), at 1.5 texels per design pixel
+//! (`render::DENSITY`). The atlas is linear-filtered for the anti-aliasing
+//! pixel shader, and every sprite's quad includes a 1-texel transparent
+//! border (see [`BORDER`]) so its outline is smoothed too.
 //!
 //! Suit pips come from `suits::mask`, rank labels from the pixel font (drawn
 //! 2x2 like UI text) and the court portraits from the sprites below (2x2).
@@ -14,13 +16,16 @@ use crate::render::DENSITY;
 use crate::suits;
 use crate::text;
 
-/// Card size in atlas texels (= canvas pixels). Odd, so the art has a center pixel.
+/// Card size in atlas texels. Odd, so the art has a center pixel.
 const TEX_W: u32 = 67;
 const TEX_H: u32 = 91;
 /// Card size in design pixels.
 pub const CARD_W: f32 = TEX_W as f32 / DENSITY;
 pub const CARD_H: f32 = TEX_H as f32 / DENSITY;
-const PAD: u32 = 2;
+/// Transparent texels between sprites in the atlas (and around its edge).
+const PAD: u32 = 3;
+/// Transparent texels around each sprite that are included in its quad.
+pub const BORDER: f32 = 1.0;
 const COLS: u32 = 5;
 /// UI suit icon sizes in texels, for draw scales 1, 2 and 3.
 const ICON_SIZES: [u32; 3] = [19, 39, 58];
@@ -127,23 +132,23 @@ pub struct CardArt {
 }
 
 impl CardArt {
-    /// Pivot used when drawing a card: its center texel.
-    const ORIGIN: (f32, f32) = ((TEX_W / 2) as f32, (TEX_H / 2) as f32);
+    /// Pivot used when drawing a card: its center texel (inside the quad's border).
+    const ORIGIN: (f32, f32) = ((TEX_W / 2) as f32 + BORDER, (TEX_H / 2) as f32 + BORDER);
 
     pub fn new(g: &Graphics) -> Self {
         let rows: u32 = 25u32.div_ceil(COLS);
-        let icon_y = rows * (TEX_H + PAD);
+        let icon_y = PAD + rows * (TEX_H + PAD);
         let icons_h: u32 = ICON_SIZES.iter().map(|s| s + PAD).sum();
-        let mut data = ImageData::new(COLS * (TEX_W + PAD), icon_y + icons_h);
+        let mut data = ImageData::new(PAD + COLS * (TEX_W + PAD), icon_y + icons_h);
         let cell = |i: u32| {
             let (cx, cy) = (i % COLS, i / COLS);
-            ((cx * (TEX_W + PAD)) as i32, (cy * (TEX_H + PAD)) as i32)
+            ((PAD + cx * (TEX_W + PAD)) as i32, (PAD + cy * (TEX_H + PAD)) as i32)
         };
         let mut faces = Vec::new();
         for id in 0..24 {
             let (x, y) = cell(id as u32);
             paint_face(&mut Painter { d: &mut data, ox: x, oy: y }, Card::from_id(id));
-            faces.push(Quad::new(x as f32, y as f32, TEX_W as f32, TEX_H as f32));
+            faces.push(bordered(x as u32, y as u32, TEX_W, TEX_H));
         }
         let (bx, by) = cell(24);
         paint_back(&mut Painter { d: &mut data, ox: bx, oy: by });
@@ -153,24 +158,25 @@ impl CardArt {
         for &size in &ICON_SIZES {
             let mut row = Vec::new();
             for (i, suit) in Suit::ALL.into_iter().enumerate() {
-                let x0 = i as u32 * (size + PAD);
+                let x0 = PAD + i as u32 * (size + PAD);
                 for (k, &on) in suits::mask(suit, size).iter().enumerate() {
                     if on {
                         data.set_pixel(x0 + k as u32 % size, y0 + k as u32 / size, Color::WHITE);
                     }
                 }
-                row.push(Quad::new(x0 as f32, y0 as f32, size as f32, size as f32));
+                row.push(bordered(x0, y0, size, size));
             }
             icons.push(row);
             y0 += size + PAD;
         }
 
         let image = g.new_image_from_data(&data);
-        image.set_filter(FilterMode::Nearest);
+        image.set_filter(FilterMode::Linear);
+        image.set_wrap(WrapMode::Clamp);
         CardArt {
             image,
             faces,
-            back: Quad::new(bx as f32, by as f32, TEX_W as f32, TEX_H as f32),
+            back: bordered(bx as u32, by as u32, TEX_W, TEX_H),
             icons,
         }
     }
@@ -218,6 +224,11 @@ impl CardArt {
                 .color(tint),
         );
     }
+}
+
+/// The quad of a `w x h` sprite at `(x, y)`, grown by [`BORDER`] on every side.
+pub fn bordered(x: u32, y: u32, w: u32, h: u32) -> Quad {
+    Quad::new(x as f32 - BORDER, y as f32 - BORDER, w as f32 + 2.0 * BORDER, h as f32 + 2.0 * BORDER)
 }
 
 pub fn suit_color(suit: Suit) -> Color {

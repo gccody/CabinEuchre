@@ -4,7 +4,7 @@
 use love2drs::prelude::*;
 
 use crate::juice::Spring;
-use crate::render::{DENSITY, snap};
+use crate::render::DENSITY;
 use crate::palette;
 use crate::sfx::{Sfx, Sound};
 use crate::text::{PixelFont, Text};
@@ -178,8 +178,8 @@ impl Button {
         g.rounded_rectangle(Fill, x, y, w, h, 3.0);
 
         if let Some((image, q)) = &self.icon {
-            // Icons are authored at canvas density.
-            let p = DrawParams::at(snap(x + w / 2.0), snap(y + h / 2.0))
+            // Icons are authored at card-art density.
+            let p = DrawParams::at(x + w / 2.0, y + h / 2.0)
                 .scale(self.text_scale / DENSITY)
                 .origin((q.w / 2.0).floor(), (q.h / 2.0).floor());
             g.draw_quad_ex(image, *q, p.color(text));

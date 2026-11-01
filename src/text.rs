@@ -1,10 +1,11 @@
 //! A hand-made bitmap pixel font and the text drawing helper every screen
-//! uses. Glyphs are authored below as tiny ASCII grids, packed into one
-//! nearest-filtered atlas at startup and drawn so every font pixel covers a
-//! whole number of canvas pixels (2x2 at scale 1), keeping text chunky and crisp.
+//! uses. Glyphs are authored below as tiny ASCII grids and packed into one
+//! atlas at startup. Like the cards, the atlas is linear-filtered for the
+//! anti-aliasing pixel shader and every quad has a transparent border
+//! (`cards::BORDER`), so text stays chunky but smooth at any scale or angle.
 //!
 //! Suit symbols (♣♦♠♥) are not font glyphs: they come from `suits::mask` at
-//! canvas density, so they are as sharp and distinct as the card pips.
+//! twice the font's density, so they are as sharp and distinct as the card pips.
 //!
 //! Metrics (in font pixels): capitals are 7 tall, lowercase descenders add 2,
 //! glyphs are 1-5 wide with 1 pixel of spacing, lines advance by 10. One
@@ -16,9 +17,10 @@ use love2drs::prelude::*;
 
 use crate::euchre::Suit;
 use crate::palette;
-use crate::render::{DENSITY, snap};
+use crate::cards::{BORDER, bordered};
+use crate::render::DENSITY;
 
-/// Design pixels per font pixel at scale 1 (2 canvas pixels).
+/// Design pixels per font pixel at scale 1 (2 card-art texels).
 pub const UNIT: f32 = 2.0 / DENSITY;
 /// Distance between baselines at scale 1, in design pixels.
 pub const LINE_HEIGHT: f32 = 10.0 * UNIT;
@@ -28,6 +30,8 @@ const CELL_H: u32 = 9;
 const SPACE_WIDTH: f32 = 3.0;
 /// Suit symbols in text: mask size in canvas pixels.
 const SUIT_SIZE: u32 = 11;
+/// Transparent atlas texels between glyphs and around the atlas edge.
+const GAP: u32 = 2;
 
 /// `#` = ink, anything else = empty. Rows may be omitted at the bottom.
 const GLYPHS: &[(char, &[&str])] = &[
@@ -142,39 +146,40 @@ pub struct PixelFont {
 
 impl PixelFont {
     pub fn new(g: &Graphics) -> Self {
-        let letters_w: u32 = GLYPHS.iter().map(|(_, rows)| glyph_width(rows) + 1).sum();
-        let total_w = letters_w + 4 * (SUIT_SIZE + 1);
-        let mut data = ImageData::new(total_w, CELL_H.max(SUIT_SIZE));
+        let letters_w: u32 = GLYPHS.iter().map(|(_, rows)| glyph_width(rows) + GAP).sum();
+        let total_w = GAP + letters_w + 4 * (SUIT_SIZE + GAP);
+        let mut data = ImageData::new(total_w, CELL_H.max(SUIT_SIZE) + 2 * GAP);
         let mut glyphs = HashMap::new();
-        let mut x0 = 0;
+        let (mut x0, y0) = (GAP, GAP);
         for &(ch, rows) in GLYPHS {
             let w = glyph_width(rows);
             for (y, row) in rows.iter().enumerate() {
                 for (x, b) in row.bytes().enumerate() {
                     if b == b'#' {
-                        data.set_pixel(x0 + x as u32, y as u32, Color::WHITE);
+                        data.set_pixel(x0 + x as u32, y0 + y as u32, Color::WHITE);
                     }
                 }
             }
-            let quad = Quad::new(x0 as f32, 0.0, w as f32, CELL_H as f32);
+            let quad = bordered(x0, y0, w, CELL_H);
             glyphs.insert(ch, Glyph { quad, width: w as f32, density: 1.0, dy: 0.0 });
-            x0 += w + 1;
+            x0 += w + GAP;
         }
         for suit in Suit::ALL {
             let mask = crate::suits::mask(suit, SUIT_SIZE);
             for (i, &on) in mask.iter().enumerate() {
                 if on {
                     let (x, y) = (i as u32 % SUIT_SIZE, i as u32 / SUIT_SIZE);
-                    data.set_pixel(x0 + x, y, Color::WHITE);
+                    data.set_pixel(x0 + x, y0 + y, Color::WHITE);
                 }
             }
             let n = SUIT_SIZE as f32;
-            let quad = Quad::new(x0 as f32, 0.0, n, n);
+            let quad = bordered(x0, y0, SUIT_SIZE, SUIT_SIZE);
             glyphs.insert(suit.symbol(), Glyph { quad, width: n / 2.0, density: 2.0, dy: 1.0 });
-            x0 += SUIT_SIZE + 1;
+            x0 += SUIT_SIZE + GAP;
         }
         let image = g.new_image_from_data(&data);
-        image.set_filter(FilterMode::Nearest);
+        image.set_filter(FilterMode::Linear);
+        image.set_wrap(WrapMode::Clamp);
         PixelFont { image, glyphs }
     }
 
@@ -246,8 +251,7 @@ fn glyph_width(rows: &[&str]) -> u32 {
 /// `Text::new("PLAY", x, y).scale(2.0).center().draw(g, font)`.
 ///
 /// Text has a hard drop shadow in `palette::INK` by default, and suit symbols
-/// (♥♦) are tinted red automatically. Whole and half scales keep font pixels
-/// on whole canvas pixels.
+/// (♥♦) are tinted red automatically.
 #[derive(Debug, Clone, Copy)]
 pub struct Text<'a> {
     text: &'a str,
@@ -336,17 +340,10 @@ impl<'a> Text<'a> {
         let px = self.scale * UNIT;
         let (ax, ay) = self.anchor;
         g.push();
-        if self.rotation == 0.0 {
-            // Snap to whole canvas pixels so glyphs stay crisp.
-            let tl = vec2(snap(self.x - ax * block.x * px), snap(self.y - ay * block.y * px));
-            g.translate(tl.x, tl.y);
-            g.scale(px, px);
-        } else {
-            g.translate(self.x, self.y);
-            g.rotate(self.rotation);
-            g.scale(px, px);
-            g.translate(-ax * block.x, -ay * block.y);
-        }
+        g.translate(self.x, self.y);
+        g.rotate(self.rotation);
+        g.scale(px, px);
+        g.translate(-ax * block.x, -ay * block.y);
         if let Some(shadow) = self.shadow {
             self.draw_glyphs(g, font, block.x, vec2(0.0, 1.0), Some(shadow));
         }
@@ -355,23 +352,24 @@ impl<'a> Text<'a> {
     }
 
     fn draw_glyphs(&self, g: &mut Graphics, font: &PixelFont, block_w: f32, offset: Vec2, shadow: Option<Color>) {
-        let px = self.scale * UNIT;
         let mut index = 0usize;
         for (row, line) in self.text.lines().enumerate() {
             let mut x = ((block_w - font.raw_line_width(line)) * self.anchor.0).round() + offset.x;
             let y = row as f32 * FONT_LINE + offset.y;
             for ch in line.chars() {
                 if let Some(glyph) = font.glyph(ch) {
-                    // Bob in whole canvas pixels, whatever the scale.
                     let bob = match self.wave {
-                        Some((t, amp)) => snap((t * 4.0 - index as f32 * 0.55).sin() * amp) / px,
+                        Some((t, amp)) => (t * 4.0 - index as f32 * 0.55).sin() * amp / (self.scale * UNIT),
                         None => 0.0,
                     };
                     let color = shadow.unwrap_or(match ch {
                         '♥' | '♦' if self.suit_colors => palette::SUIT_RED_LIGHT,
                         _ => self.color,
                     });
-                    let params = DrawParams::at(x, y + glyph.dy + bob).scale(1.0 / glyph.density).color(color);
+                    let params = DrawParams::at(x, y + glyph.dy + bob)
+                        .scale(1.0 / glyph.density)
+                        .origin(BORDER, BORDER)
+                        .color(color);
                     g.draw_quad_ex(&font.image, glyph.quad, params);
                 }
                 x += font.advance(ch);

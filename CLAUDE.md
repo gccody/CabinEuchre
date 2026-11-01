@@ -54,10 +54,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
-| `src/render.rs` | 640x360 design space rendered at `DENSITY` 1.5 into a 960x540 canvas, `snap`, swirl background, CRT present pass, `View::to_design` |
-| `src/shaders/*.wgsl` | `background.wgsl` (swirl) and `crt.wgsl` (post-process). Loaded with `include_str!` |
-| `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is 2 canvas px (`UNIT` = 4/3 design px); use text scales in steps of 0.5 so pixels stay whole |
-| `src/cards.rs` | procedural pixel-art card atlas (faces, court portraits, back) and white suit icons; `Pose`. Painted at canvas density, drawn at `1/DENSITY` |
+| `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, swirl background, CRT present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
+| `src/shaders/*.wgsl` | `background.wgsl` (swirl), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `crt.wgsl` (post-process). Loaded with `include_str!` |
+| `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is `UNIT` (4/3) design px at scale 1 |
+| `src/cards.rs` | procedural pixel-art card atlas (faces, court portraits, back) and white suit icons; `Pose`. Painted at `DENSITY`, drawn at `1/DENSITY`. Atlases are linear-filtered and every quad has a 1-texel transparent border (`cards::bordered`) so `pixel.wgsl` can smooth sprite outlines |
 | `src/suits.rs` | suit shapes: math masks at any size, plus hand-drawn 11 and 13 px masks so small clubs and spades stay distinct |
 | `src/ui.rs` | `Rect`, panels, springy `Button` |
 | `src/palette.rs` | every color the game uses |
@@ -100,7 +100,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 The *feel* of Balatro, built from original assets and code. Never copy Balatro's
 sprites, shaders, sounds or other files.
 
-- Low-res canvas scaled up with nearest filtering. Pixel-art sprites at 1x canvas scale.
+- Chunky pixel art, rendered at the window's full resolution: texels stay square and crisp, but
+  rotated and scaled sprites have smooth, anti-aliased edges (`pixel.wgsl`). No stair-stepping.
 - Background: slow, hypnotic swirl of 3 palette colors (felt greens by default). Tune in
   `background.wgsl` and the `FELT*` palette constants. `Renderer::swirl` controls the twist.
 - CRT pass: sharp-bilinear upscale, gentle barrel curvature, scanlines, chromatic aberration,
@@ -108,7 +109,7 @@ sprites, shaders, sounds or other files.
 - Cards feel physical: hover lift and tilt toward the mouse, flips with a little hop, springy
   deals and plays, a shadow under every card, a gold pulse on the trick winner.
 - Bold, saturated accents on dark panels. Thick dark outlines and drop shadows.
-- Font: the custom bitmap font in `text.rs`. Cards are 67x91 canvas px (about 45x61 design px) and painted in `cards.rs`.
+- Font: the custom bitmap font in `text.rs`. Cards are 67x91 texels (about 45x61 design px) and painted in `cards.rs`.
 - Sound: short, punchy, slightly randomized. Music is synthesized unless
   `assets/music/theme.ogg` exists.
 
