@@ -5,7 +5,7 @@
 //! - `app`      the love2drs `Game` impl: owns the active scene and the render pipeline
 //! - `scene`    the `Scene` trait, shared resources and transitions between screens
 //! - `scenes`   title, table and the options / how-to-play overlays
-//! - `render`   virtual-resolution canvas, swirl background and CRT post-processing
+//! - `render`   virtual-resolution canvas, tabletop background and lamplight post-process
 //! - `cards`    procedural pixel-art card faces and back
 //! - `text`     the hand-made bitmap pixel font
 //! - `ui`       buttons and panels

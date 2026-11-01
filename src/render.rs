@@ -6,8 +6,10 @@
 //!    Pixel art (cards, suit icons, the font) is authored at `DENSITY` texels
 //!    per design pixel and drawn through `shaders/pixel.wgsl`, which keeps
 //!    texels chunky but anti-aliases their edges at any scale or rotation.
-//! 3. The canvas starts each frame with the animated swirl background.
-//! 4. The canvas is drawn to the window through the CRT post-process shader.
+//! 3. The canvas starts each frame with the cabin tabletop (`background.wgsl`):
+//!    walnut planks, a felt mat and a slowly swaying lamp.
+//! 4. The canvas is drawn to the window through the lamplight post-process
+//!    (`lamplight.wgsl`): warm grade, vignette and film grain.
 //!
 //! Use [`View::to_design`] to convert mouse positions into design space.
 
@@ -59,12 +61,10 @@ fn canvas_size(view: View, dpi: f32) -> (u32, u32) {
 pub struct Renderer {
     canvas: Canvas,
     background: Shader,
-    crt: Shader,
+    lamplight: Shader,
     pixel: Shader,
-    /// 0 = CRT off, 1 = full effect. Driven by the CRT strength option.
-    pub crt_strength: f32,
-    /// How strongly the background twists.
-    pub swirl: f32,
+    /// 0 = post-process off, 1 = full effect. Driven by the Atmosphere option.
+    pub atmosphere: f32,
     view: View,
 }
 
@@ -76,10 +76,9 @@ impl Renderer {
         Ok(Renderer {
             canvas: new_canvas(g, cw, ch),
             background: g.new_shader(include_str!("shaders/background.wgsl"))?,
-            crt: g.new_shader(include_str!("shaders/crt.wgsl"))?,
+            lamplight: g.new_shader(include_str!("shaders/lamplight.wgsl"))?,
             pixel: g.new_shader(include_str!("shaders/pixel.wgsl"))?,
-            crt_strength: 1.0,
-            swirl: 1.0,
+            atmosphere: 1.0,
             view,
         })
     }
@@ -94,18 +93,28 @@ impl Renderer {
         self.view = View::fit(w, h);
         let (cw, ch) = canvas_size(self.view, g.dpi_scale());
         let (cw, ch) = (cw as f32, ch as f32);
-        self.background.send(0, [time, cw, ch, self.swirl]);
-        self.background.send(1, palette::FELT_DEEP);
-        self.background.send(2, palette::FELT);
-        self.background.send(3, palette::FELT_GLOW);
-        self.crt.send(0, [time, cw, ch, self.crt_strength]);
+        self.background.send(0, [time, cw, ch, 0.0]);
+        let colors = [
+            palette::WOOD_DARK,
+            palette::WOOD,
+            palette::WOOD_LIGHT,
+            palette::FELT_DEEP,
+            palette::FELT,
+            palette::FELT_GLOW,
+            palette::LAMP,
+        ];
+        for (i, c) in colors.into_iter().enumerate() {
+            self.background.send(i + 1, c);
+        }
+        self.lamplight.send(0, [time, cw, ch, self.atmosphere]);
         // Physical window pixels per canvas pixel, for the sharp-bilinear sampler.
         let px_scale = self.view.scale * g.dpi_scale() / (cw / VIEW_W as f32);
-        self.crt.send(1, [px_scale, VIEW_H as f32, 0.0, 0.0]);
+        self.lamplight.send(1, [px_scale, 0.0, 0.0, 0.0]);
+        self.lamplight.send(2, palette::LAMP);
     }
 
     /// Runs `draw_scene` in design space on top of the background, then
-    /// presents the result to the window through the CRT shader.
+    /// presents the result to the window through the lamplight shader.
     pub fn frame(&mut self, g: &mut Graphics, draw_scene: impl FnOnce(&mut Graphics)) {
         let (w, h) = g.dimensions();
         self.view = View::fit(w, h);
@@ -117,7 +126,7 @@ impl Renderer {
 
         let (background, pixel) = (&self.background, &self.pixel);
         g.with_canvas(&self.canvas, |g| {
-            g.clear(palette::FELT_DEEP);
+            g.clear(palette::WOOD_DARK);
             g.set_shader(Some(background));
             g.set_color(Color::WHITE);
             g.rectangle(Fill, 0.0, 0.0, cw as f32, ch as f32);
@@ -131,7 +140,7 @@ impl Renderer {
 
         g.set_background_color(Color::BLACK);
         g.set_color(Color::WHITE);
-        g.set_shader(Some(&self.crt));
+        g.set_shader(Some(&self.lamplight));
         g.draw_ex(
             &self.canvas,
             DrawParams::at(self.view.offset.x, self.view.offset.y).scale(self.view.scale / density),
@@ -142,7 +151,7 @@ impl Renderer {
 
 fn new_canvas(g: &mut Graphics, w: u32, h: u32) -> Canvas {
     let canvas = g.new_canvas(w, h);
-    // Linear sampling is required by the CRT shader's sharp-bilinear upscale.
+    // Linear sampling is required by the lamplight shader's sharp-bilinear upscale.
     canvas.set_filter(FilterMode::Linear);
     canvas
 }

@@ -2,7 +2,7 @@
 //!
 //! The app owns exactly one active scene. Scenes receive input already
 //! converted to design-space coordinates (see `render::View`) and draw in
-//! design space; they never deal with window size, the CRT pass or the
+//! design space; they never deal with window size, the post-process pass or the
 //! background.
 
 use love2drs::prelude::*;

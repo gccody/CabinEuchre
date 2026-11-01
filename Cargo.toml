@@ -3,7 +3,7 @@ name = "euchre"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Euchre with a juicy, CRT-glow card-game presentation."
+description = "Euchre on a lamp-lit cabin table, with juicy pixel-art card-game feel."
 publish = false
 
 [dependencies]

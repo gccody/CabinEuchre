@@ -1,7 +1,9 @@
 //! Where everything sits on the table, in design space. Seats go clockwise
 //! from the bottom: you (0), west (1), partner/north (2), east (3).
 //!
-//! The left 150 pixels belong to the sidebar; the table is centered in the rest.
+//! The table is centered on the felt. The score pad sits in the top-left
+//! corner, the trump medallion in the top-right, so the side seats keep their
+//! won tricks and kitty below their name plates.
 
 use std::cmp::Reverse;
 use std::f32::consts::PI;
@@ -13,7 +15,7 @@ use crate::cards::{CARD_H, CARD_W};
 use crate::euchre::{Card, Seat, Suit};
 
 /// Center of the playing area (the pile and the trick).
-pub const CENTER: Vec2 = Vec2::new(395.0, 150.0);
+pub const CENTER: Vec2 = Vec2::new(320.0, 152.0);
 /// Baseline of the human's prompt text; bid buttons sit just below it.
 pub const PROMPT_Y: f32 = 232.0;
 
@@ -38,32 +40,32 @@ pub fn seat_angle(seat: Seat) -> f32 {
 }
 
 pub fn hand_anchor(seat: Seat) -> Vec2 {
-    [vec2(395.0, 314.0), vec2(190.0, 148.0), vec2(395.0, 20.0), vec2(598.0, 148.0)][seat]
+    [vec2(320.0, 314.0), vec2(98.0, 156.0), vec2(320.0, 20.0), vec2(542.0, 156.0)][seat]
 }
 
 /// Center of each player's name plate.
 pub fn plate_pos(seat: Seat) -> Vec2 {
-    [vec2(258.0, 336.0), vec2(190.0, 222.0), vec2(500.0, 16.0), vec2(598.0, 222.0)][seat]
+    [vec2(170.0, 336.0), vec2(98.0, 228.0), vec2(425.0, 16.0), vec2(542.0, 228.0)][seat]
 }
 
 /// Where each seat stacks the tricks it wins.
 pub fn won_spot(seat: Seat) -> Vec2 {
-    [vec2(532.0, 322.0), vec2(190.0, 64.0), vec2(290.0, 20.0), vec2(598.0, 64.0)][seat]
+    [vec2(457.0, 322.0), vec2(98.0, 270.0), vec2(215.0, 20.0), vec2(542.0, 270.0)][seat]
 }
 
 /// Where the kitty goes once trump is set (beside the dealer).
 pub fn kitty_spot(seat: Seat) -> Vec2 {
-    [vec2(258.0, 304.0), vec2(190.0, 264.0), vec2(592.0, 30.0), vec2(598.0, 264.0)][seat]
+    [vec2(170.0, 304.0), vec2(98.0, 318.0), vec2(522.0, 30.0), vec2(542.0, 318.0)][seat]
 }
 
 /// Anchor for speech bubbles, plus which part of the bubble sits on it
 /// (0 = left edge, 0.5 = center, 1 = right edge) so side bubbles grow toward the table.
 pub fn bubble_pos(seat: Seat) -> (Vec2, f32) {
     [
-        (vec2(258.0, 316.0), 0.5),
-        (vec2(218.0, 86.0), 0.0),
-        (vec2(470.0, 54.0), 0.5),
-        (vec2(572.0, 86.0), 1.0),
+        (vec2(170.0, 314.0), 0.5),
+        (vec2(130.0, 120.0), 0.0),
+        (vec2(420.0, 56.0), 0.5),
+        (vec2(510.0, 120.0), 1.0),
     ][seat]
 }
 

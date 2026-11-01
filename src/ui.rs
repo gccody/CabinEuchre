@@ -1,5 +1,6 @@
-//! Small immediate-ish UI kit: rectangles, chunky panels and springy buttons
-//! in the house style (saturated fill, darker lip underneath, hard shadow).
+//! Small immediate-ish UI kit: rectangles, panels and springy buttons in the
+//! house style: chamfered corners, thick dark outlines, brass trim, a beveled
+//! face over a darker lip, and hard drop shadows.
 
 use love2drs::prelude::*;
 
@@ -36,26 +37,62 @@ impl Rect {
     }
 }
 
-/// A dark rounded panel with a lighter edge and a hard drop shadow.
-pub fn panel(g: &mut Graphics, r: Rect, fill: Color) {
-    g.set_color(palette::INK.with_alpha(palette::SHADOW_ALPHA));
-    g.rounded_rectangle(Fill, r.x + 2.0, r.y + 3.0, r.w, r.h, 4.0);
-    g.set_color(palette::PANEL_EDGE);
-    g.rounded_rectangle(Fill, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0, 5.0);
-    g.set_color(fill);
-    g.rounded_rectangle(Fill, r.x, r.y, r.w, r.h, 4.0);
+/// A rectangle with its corners cut at 45 degrees (`cut` design px). Convex,
+/// so it fills as a single polygon. The house shape for panels and buttons.
+pub fn chamfer(g: &mut Graphics, mode: DrawMode, x: f32, y: f32, w: f32, h: f32, cut: f32) {
+    let c = cut.min(w / 2.0).min(h / 2.0).max(0.0);
+    g.polygon(
+        mode,
+        &[x + c, y, x + w - c, y, x + w, y + c, x + w, y + h - c, x + w - c, y + h, x + c, y + h, x, y + h - c, x, y + c],
+    );
 }
 
-/// A recessed box inside a panel.
+/// A walnut panel: thick dark outline, brass rim, an inner brass hairline and
+/// a brass stud in each corner, over a hard drop shadow.
+pub fn panel(g: &mut Graphics, r: Rect, fill: Color) {
+    g.set_color(palette::INK.with_alpha(palette::SHADOW_ALPHA));
+    chamfer(g, Fill, r.x + 3.0, r.y + 4.0, r.w, r.h, 6.0);
+    g.set_color(palette::INK);
+    chamfer(g, Fill, r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0, 8.0);
+    g.set_color(palette::BRASS_DARK);
+    chamfer(g, Fill, r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0, 7.0);
+    g.set_color(palette::BRASS);
+    g.rectangle(Fill, r.x + 5.0, r.y - 2.0, r.w - 10.0, 1.0);
+    g.set_color(fill);
+    chamfer(g, Fill, r.x, r.y, r.w, r.h, 6.0);
+    g.set_color(palette::BRASS.with_alpha(0.35 * fill.a));
+    g.set_line_width(1.0);
+    chamfer(g, Line, r.x + 4.5, r.y + 4.5, r.w - 9.0, r.h - 9.0, 3.0);
+    for (sx, sy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let (x, y) = ((r.x + 3.0 + sx * (r.w - 9.0)).round(), (r.y + 3.0 + sy * (r.h - 9.0)).round());
+        g.set_color(palette::INK.with_alpha(0.6));
+        g.rectangle(Fill, x + 1.0, y + 1.0, 3.0, 3.0);
+        g.set_color(palette::BRASS);
+        g.rectangle(Fill, x, y, 3.0, 3.0);
+        g.set_color(palette::BRASS_LIGHT);
+        g.rectangle(Fill, x, y, 1.0, 1.0);
+    }
+}
+
+/// A recessed box inside a panel (shadowed top edge, lit bottom edge).
 pub fn inset(g: &mut Graphics, r: Rect, fill: Color) {
     g.set_color(fill);
-    g.rounded_rectangle(Fill, r.x, r.y, r.w, r.h, 3.0);
+    chamfer(g, Fill, r.x, r.y, r.w, r.h, 2.0);
+    g.set_color(palette::INK.with_alpha(0.45 * fill.a));
+    g.rectangle(Fill, r.x + 2.0, r.y, r.w - 4.0, 1.0);
+    g.set_color(palette::PANEL_LIGHT.with_alpha(0.6 * fill.a));
+    g.rectangle(Fill, r.x + 2.0, r.y + r.h - 1.0, r.w - 4.0, 1.0);
 }
 
 /// Full-screen dim behind modal panels.
 pub fn dim_screen(g: &mut Graphics, alpha: f32) {
     g.set_color(palette::INK.with_alpha(alpha));
     g.rectangle(Fill, -20.0, -20.0, 700.0, 400.0);
+}
+
+/// Rough perceived brightness, to pick a text shadow that suits a fill.
+fn luma(c: Color) -> f32 {
+    0.299 * c.r + 0.587 * c.g + 0.114 * c.b
 }
 
 pub struct Button {
@@ -107,8 +144,11 @@ impl Button {
         Button::new(label, rect, palette::GREEN, palette::GREEN_DARK)
     }
 
-    pub fn orange(label: impl Into<String>, rect: Rect) -> Self {
-        Button::new(label, rect, palette::ORANGE, palette::ORANGE_DARK)
+    /// The primary action: a brass plaque with engraved (dark) lettering.
+    pub fn brass(label: impl Into<String>, rect: Rect) -> Self {
+        let mut b = Button::new(label, rect, palette::BRASS, palette::BRASS_DARK);
+        b.text_color = palette::INK;
+        b
     }
 
     pub fn grey(label: impl Into<String>, rect: Rect) -> Self {
@@ -170,12 +210,24 @@ impl Button {
         let (w, h) = (r.w * s, r.h * s);
         let (x, y) = ((r.x + (r.w - w) / 2.0).round(), (r.y + (r.h - h) / 2.0 - raise + sink).round());
 
-        g.set_color(palette::INK.with_alpha(0.45));
-        g.rounded_rectangle(Fill, r.x + 1.0, r.y + lip_h + 2.0, r.w, r.h, 3.0);
+        let cut = 3.0;
+        let base_y = r.y + lip_h;
+        let base_x = (r.x + (r.w - w) / 2.0).round();
+        g.set_color(palette::INK.with_alpha(0.4));
+        chamfer(g, Fill, r.x + 2.0, base_y + 2.0, r.w, r.h, cut);
+        // Dark outline around the lip and the body, then the lip, then the body.
+        g.set_color(palette::INK);
+        chamfer(g, Fill, base_x - 1.0, base_y - 1.0, w + 2.0, h + 2.0, cut + 1.0);
+        chamfer(g, Fill, x - 1.0, y - 1.0, w + 2.0, h + 2.0, cut + 1.0);
         g.set_color(lip);
-        g.rounded_rectangle(Fill, x, r.y + lip_h, w, h, 3.0);
+        chamfer(g, Fill, base_x, base_y, w, h, cut);
         g.set_color(body);
-        g.rounded_rectangle(Fill, x, y, w, h, 3.0);
+        chamfer(g, Fill, x, y, w, h, cut);
+        // Bevel: a lit top edge and a shaded bottom edge.
+        g.set_color(body.lerp(palette::WHITE, 0.35));
+        g.rectangle(Fill, x + cut, y + 1.0, w - cut * 2.0, 1.0);
+        g.set_color(body.lerp(lip, 0.5));
+        g.rectangle(Fill, x + cut, y + h - 2.0, w - cut * 2.0, 1.0);
 
         if let Some((image, q)) = &self.icon {
             // Icons are authored at card-art density.
@@ -189,6 +241,10 @@ impl Button {
             .scale(self.text_scale)
             .color(text)
             .center();
+        if luma(text) < 0.35 {
+            // Dark lettering reads as engraved: a light highlight below instead of a shadow.
+            t = t.shadow(body.lerp(palette::WHITE, 0.4));
+        }
         if !self.suit_tint {
             t = t.plain_suits();
         }
@@ -272,20 +328,34 @@ impl Slider {
         let r = self.rect;
         let fill_w = (r.w * self.value).max(0.0);
         g.set_color(palette::INK);
-        g.rounded_rectangle(Fill, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0, 3.0);
-        g.set_color(palette::PANEL_LIGHT);
-        g.rounded_rectangle(Fill, r.x, r.y, r.w, r.h, 2.0);
+        g.rectangle(Fill, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0);
+        g.set_color(palette::PANEL_DARK);
+        g.rectangle(Fill, r.x, r.y, r.w, r.h);
         if fill_w > 1.0 {
-            g.set_color(self.color.lerp(palette::WHITE, self.hover * 0.12));
-            g.rounded_rectangle(Fill, r.x, r.y, fill_w, r.h, 2.0);
+            let c = self.color.lerp(palette::WHITE, self.hover * 0.12);
+            g.set_color(c);
+            g.rectangle(Fill, r.x, r.y, fill_w, r.h);
+            g.set_color(c.lerp(palette::WHITE, 0.3));
+            g.rectangle(Fill, r.x, r.y, fill_w, 1.0);
         }
+        // Notches every 25%, like a fader's scale.
+        g.set_color(palette::MUTED.with_alpha(0.5));
+        for i in 1..4 {
+            g.rectangle(Fill, (r.x + r.w * i as f32 / 4.0).round(), r.y + r.h + 2.0, 1.0, 2.0);
+        }
+        // Brass fader knob with a center groove.
         let (kx, ky) = (r.x + fill_w, r.y + r.h / 2.0);
-        let (kw, kh) = (7.0 * self.knob.value, 13.0 * self.knob.value);
+        let (kw, kh) = (8.0 * self.knob.value, 14.0 * self.knob.value);
+        let (x, y) = (kx - kw / 2.0, ky - kh / 2.0);
         g.set_color(palette::INK.with_alpha(0.5));
-        g.rounded_rectangle(Fill, kx - kw / 2.0 + 1.0, ky - kh / 2.0 + 2.0, kw, kh, 2.0);
+        chamfer(g, Fill, x + 1.0, y + 2.0, kw, kh, 2.0);
         g.set_color(palette::INK);
-        g.rounded_rectangle(Fill, kx - kw / 2.0 - 1.0, ky - kh / 2.0 - 1.0, kw + 2.0, kh + 2.0, 3.0);
-        g.set_color(palette::CREAM);
-        g.rounded_rectangle(Fill, kx - kw / 2.0, ky - kh / 2.0, kw, kh, 2.0);
+        chamfer(g, Fill, x - 1.0, y - 1.0, kw + 2.0, kh + 2.0, 3.0);
+        g.set_color(palette::BRASS);
+        chamfer(g, Fill, x, y, kw, kh, 2.0);
+        g.set_color(palette::BRASS_LIGHT);
+        g.rectangle(Fill, x + 2.0, y + 1.0, kw - 4.0, 1.0);
+        g.set_color(palette::BRASS_DARK);
+        g.rectangle(Fill, x + 1.0, ky - 0.5, kw - 2.0, 1.0);
     }
 }

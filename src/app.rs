@@ -1,5 +1,5 @@
 //! The love2drs `Game` implementation: wires input, the active scene and the
-//! render pipeline together, and applies settings (volume, CRT, fullscreen).
+//! render pipeline together, and applies settings (volume, atmosphere, fullscreen).
 
 use love2drs::prelude::*;
 
@@ -22,8 +22,8 @@ pub struct App {
     /// screenshot frame numbers map to predictable game time (and n > 1
     /// fast-forwards soak tests).
     fixed_dt: Option<f32>,
-    /// The CRT strength F2 restores when it turns the effect back on.
-    crt_restore: f32,
+    /// The atmosphere strength F2 restores when it turns the effect back on.
+    atmosphere_restore: f32,
 }
 
 impl App {
@@ -56,7 +56,7 @@ impl App {
             shared,
             scene,
             fade: 1.0,
-            crt_restore: 1.0,
+            atmosphere_restore: 1.0,
             fixed_dt: std::env::var("EUCHRE_FIXED_DT")
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
@@ -82,7 +82,7 @@ impl App {
         let s = &mut self.shared.settings;
         ctx.audio.set_volume(s.volume);
         self.shared.sfx.set_music_volume(s.music);
-        self.renderer.crt_strength = s.crt;
+        self.renderer.atmosphere = s.atmosphere;
         if ctx.window.is_fullscreen() != s.fullscreen {
             ctx.window.set_fullscreen(s.fullscreen);
         }
@@ -125,13 +125,13 @@ impl Game for App {
                 return;
             }
             Key::F2 => {
-                // Toggle the CRT effect (handy for judging raw art).
+                // Toggle the lamplight post-process (handy for judging raw art).
                 let s = &mut self.shared.settings;
-                if s.crt > 0.0 {
-                    self.crt_restore = s.crt;
-                    s.crt = 0.0;
+                if s.atmosphere > 0.0 {
+                    self.atmosphere_restore = s.atmosphere;
+                    s.atmosphere = 0.0;
                 } else {
-                    s.crt = self.crt_restore;
+                    s.atmosphere = self.atmosphere_restore;
                 }
                 s.save();
                 return;

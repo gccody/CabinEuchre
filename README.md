@@ -1,7 +1,8 @@
 # Euchre
 
-The classic four-player trick-taking card game with a juicy, CRT-glow, Balatro-inspired
-presentation, built in Rust on [love2drs](https://github.com/gccody/Love2DRS).
+The classic four-player trick-taking card game, dealt on a lamp-lit cabin table: chunky pixel
+art, walnut and brass, a felt mat and a pencil score pad, with springy cards and punchy sounds.
+Built in Rust on [love2drs](https://github.com/gccody/Love2DRS).
 
 You and your partner (Benny, across the table) play against Rosa and Jules. Pick trump, take
 tricks, euchre the other team, first to 10 wins.
@@ -30,10 +31,10 @@ a lone march is 4, and getting euchred gives the other team 2.
 | bid buttons, or **O** / **P** / **A** / **C D S H** | order up / pass / alone / name a suit |
 | **Space** / **Enter** | continue after a hand |
 | **Esc** | pause menu (resume, options, how to play, main menu) |
-| **F2** | toggle the CRT effect (set its strength with the slider in Options) |
+| **F2** | toggle the lamplight effect (set its strength with the Atmosphere slider in Options) |
 | **F11** | toggle fullscreen |
 
-**Options:** volume, music, CRT strength, game speed (relaxed / normal / fast), points to win
+**Options:** volume, music, atmosphere, game speed (relaxed / normal / fast), points to win
 (5 / 7 / 10), stick the dealer, fullscreen. Settings are saved to `%APPDATA%\Euchre\settings.txt`
 (or `~/.config/euchre/settings.txt`).
 

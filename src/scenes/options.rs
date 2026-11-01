@@ -1,5 +1,5 @@
 //! The options panel (opened from the title screen or the pause menu).
-//! Volume, music and CRT strength are sliders; the rest step with arrows.
+//! Volume, music and atmosphere are sliders; the rest step with arrows.
 //! Changes apply live (the app syncs settings every frame) and are saved on close.
 
 use love2drs::prelude::*;
@@ -15,14 +15,14 @@ use crate::ui::{self, Button, Rect, Slider};
 enum Opt {
     Volume,
     Music,
-    Crt,
+    Atmosphere,
     Speed,
     Target,
     Stick,
     Fullscreen,
 }
 
-const OPTS: [Opt; 7] = [Opt::Volume, Opt::Music, Opt::Crt, Opt::Speed, Opt::Target, Opt::Stick, Opt::Fullscreen];
+const OPTS: [Opt; 7] = [Opt::Volume, Opt::Music, Opt::Atmosphere, Opt::Speed, Opt::Target, Opt::Stick, Opt::Fullscreen];
 
 const PANEL: Rect = Rect::new(140.0, 40.0, 360.0, 280.0);
 const ROW_Y: f32 = PANEL.y + 46.0;
@@ -61,7 +61,7 @@ impl OptionsPanel {
                     Some(v) => Control::Slider(Slider::new(
                         Rect::new(CTRL_X, y - 3.0, CTRL_W - 52.0, 7.0),
                         v,
-                        if opt == Opt::Crt { palette::ORANGE } else { palette::BLUE },
+                        if opt == Opt::Atmosphere { palette::ORANGE } else { palette::GREEN },
                     )),
                     None => Control::Arrows(Box::new((
                         Button::grey("<", Rect::new(CTRL_X, y - 8.0, 18.0, 16.0)),
@@ -75,7 +75,7 @@ impl OptionsPanel {
         pop.target = 1.0;
         OptionsPanel {
             rows,
-            back: Button::orange("BACK", Rect::centered(PANEL.center().x, PANEL.y + PANEL.h - 20.0, 80.0, 18.0)),
+            back: Button::brass("BACK", Rect::centered(PANEL.center().x, PANEL.y + PANEL.h - 20.0, 80.0, 18.0)),
             pop,
         }
     }
@@ -153,7 +153,7 @@ impl OptionsPanel {
         g.translate(-c.x, -c.y);
 
         ui::panel(g, PANEL, palette::PANEL);
-        Text::new("OPTIONS", c.x, PANEL.y + 20.0).scale(2.0).center().draw(g, font);
+        Text::new("OPTIONS", c.x, PANEL.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
 
         for row in &self.rows {
             let y = row.y;
@@ -192,7 +192,7 @@ fn label(opt: Opt) -> &'static str {
     match opt {
         Opt::Volume => "Volume",
         Opt::Music => "Music",
-        Opt::Crt => "CRT strength",
+        Opt::Atmosphere => "Atmosphere",
         Opt::Speed => "Game speed",
         Opt::Target => "Points to win",
         Opt::Stick => "Stick the dealer",
@@ -212,7 +212,7 @@ fn value_text(opt: Opt, s: &Settings) -> String {
     match opt {
         Opt::Volume => percent(s.volume),
         Opt::Music => percent(s.music),
-        Opt::Crt => percent(s.crt),
+        Opt::Atmosphere => percent(s.atmosphere),
         Opt::Speed => SPEED_NAMES[s.speed].into(),
         Opt::Target => s.target.to_string(),
         Opt::Stick => on_off(s.stick_the_dealer),
@@ -225,7 +225,7 @@ fn slider_value(opt: Opt, s: &Settings) -> Option<f32> {
     match opt {
         Opt::Volume => Some(s.volume),
         Opt::Music => Some(s.music),
-        Opt::Crt => Some(s.crt),
+        Opt::Atmosphere => Some(s.atmosphere),
         _ => None,
     }
 }
@@ -234,7 +234,7 @@ fn set_slider_value(opt: Opt, s: &mut Settings, v: f32) {
     match opt {
         Opt::Volume => s.volume = v,
         Opt::Music => s.music = v,
-        Opt::Crt => s.crt = v,
+        Opt::Atmosphere => s.atmosphere = v,
         _ => {}
     }
 }
@@ -248,6 +248,6 @@ fn step(opt: Opt, s: &mut Settings, dir: i32) {
         }
         Opt::Stick => s.stick_the_dealer = !s.stick_the_dealer,
         Opt::Fullscreen => s.fullscreen = !s.fullscreen,
-        Opt::Volume | Opt::Music | Opt::Crt => {}
+        Opt::Volume | Opt::Music | Opt::Atmosphere => {}
     }
 }

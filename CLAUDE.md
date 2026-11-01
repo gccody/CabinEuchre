@@ -1,8 +1,9 @@
 # Euchre
 
 A Euchre card game in Rust on the [love2drs](https://github.com/gccody/Love2DRS) framework, with
-a Balatro-inspired presentation: chunky pixels, a swirling painted background, CRT glow, and
-springy feedback with punchy sounds (lively, but deliberately not over the top).
+a cozy Great Lakes cabin presentation: chunky pixel art on a lamp-lit walnut table with a felt
+mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with punchy sounds
+(lively, but deliberately not over the top).
 
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
@@ -22,7 +23,7 @@ LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
-of frame numbers. In game, F2 toggles the CRT effect (useful for judging raw art; it restores the
+of frame numbers. In game, F2 toggles the lamplight post-process (useful for judging raw art; it restores the
 slider's strength when turned back on) and F11 toggles fullscreen.
 
 ### Debug switches (environment variables)
@@ -54,8 +55,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
-| `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, swirl background, CRT present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
-| `src/shaders/*.wgsl` | `background.wgsl` (swirl), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `crt.wgsl` (post-process). Loaded with `include_str!` |
+| `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, tabletop background, lamplight present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
+| `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
 | `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is `UNIT` (4/3) design px at scale 1 |
 | `src/cards.rs` | procedural pixel-art card atlas (faces, court portraits, back) and white suit icons; `Pose`. Painted at `DENSITY`, drawn at `1/DENSITY`. Atlases are linear-filtered and every quad has a 1-texel transparent border (`cards::bordered`) so `pixel.wgsl` can smooth sprite outlines |
 | `src/suits.rs` | suit shapes: math masks at any size, plus hand-drawn 11 and 13 px masks so small clubs and spades stay distinct |
@@ -97,18 +98,31 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 
 ## Art direction
 
-The *feel* of Balatro, built from original assets and code. Never copy Balatro's
-sprites, shaders, sounds or other files.
+A Great Lakes cabin card night: euchre as it's played on a kitchen or lodge table. The game was
+once Balatro-inspired and was deliberately redesigned to have its own identity, so avoid drifting
+back toward Balatro's look: no swirling painted backgrounds, CRT scanlines or barrel curvature,
+slate-gray rounded panels, rainbow button rows or a run-info sidebar. Never copy Balatro's (or any
+other game's) sprites, shaders, sounds or other files.
 
 - Chunky pixel art, rendered at the window's full resolution: texels stay square and crisp, but
   rotated and scaled sprites have smooth, anti-aliased edges (`pixel.wgsl`). No stair-stepping.
-- Background: slow, hypnotic swirl of 3 palette colors (felt greens by default). Tune in
-  `background.wgsl` and the `FELT*` palette constants. `Renderer::swirl` controls the twist.
-- CRT pass: sharp-bilinear upscale, gentle barrel curvature, scanlines, chromatic aberration,
-  vignette. Strength is the "CRT strength" slider in Options (0 to 100%).
+- Table (`background.wgsl`): walnut planks with staggered joints under a lake-teal felt mat with
+  a stitched edge, snapped to the pixel-art texel grid. A pendant lamp sways very slowly; its
+  light falls off in ordered-dither (Bayer) bands, and a few dust motes drift through the beam.
+  Colors are the `WOOD*`, `FELT*` and `LAMP` palette constants.
+- Lamplight pass (`lamplight.wgsl`): sharp-bilinear upscale, warm grade, oval vignette, fine film
+  grain at 12 fps. Strength is the "Atmosphere" slider in Options (saved as `atmosphere`; the
+  old `crt` key is still read).
+- UI: chamfered (cut-corner) shapes via `ui::chamfer`, thick dark outlines, brass trim. Panels
+  are walnut with a brass rim, inner hairline and corner studs. Buttons are beveled plaques over a
+  darker lip. The primary action is brass with engraved dark lettering (`Button::brass`); others
+  are pine, lake blue, cranberry or walnut.
+- Table HUD: no sidebar. The score is a tilted paper score pad (top left: WE / THEY, pencil
+  numbers and tally marks, trick dots, a note), trump is a brass medallion with a ribbon (top
+  right). The pad stays lit above the result banner's dim so the points visibly tick up.
 - Cards feel physical: hover lift and tilt toward the mouse, flips with a little hop, springy
-  deals and plays, a shadow under every card, a gold pulse on the trick winner.
-- Bold, saturated accents on dark panels. Thick dark outlines and drop shadows.
+  deals and plays, a shadow under every card, a gold pulse on the trick winner. Backs are buffalo
+  check plaid with a pine-tree badge.
 - Font: the custom bitmap font in `text.rs`. Cards are 67x91 texels (about 45x61 design px) and painted in `cards.rs`.
 - Sound: short, punchy, slightly randomized. Music is synthesized unless
   `assets/music/theme.ogg` exists.

@@ -13,7 +13,13 @@ use crate::scene::Shared;
 use crate::text::Text;
 use crate::ui::{self, Rect};
 
-const SIDEBAR: Rect = Rect::new(6.0, 6.0, 138.0, 348.0);
+/// The paper score pad in the top-left corner (before its slight tilt).
+const PAD: Rect = Rect::new(12.0, 11.0, 124.0, 86.0);
+const PAD_TILT: f32 = -0.035;
+/// Where score bursts fly from: the "WE" column of the pad.
+pub(super) const PAD_SCORE_US: Vec2 = Vec2::new(43.0, 44.0);
+/// Center of the brass trump medallion in the top-right corner.
+const MEDALLION: Vec2 = Vec2::new(578.0, 40.0);
 
 fn team_color(team: usize) -> Color {
     if team == 0 { palette::US } else { palette::THEM }
@@ -27,7 +33,9 @@ impl Table {
             let t = shared.time * 60.0;
             g.translate((t * 1.7).sin() * a, (t * 2.3).cos() * a);
         }
-        self.draw_sidebar(shared, g);
+        self.draw_scorepad(shared, g);
+        self.draw_trump(shared, g);
+        self.menu_button.draw(g, &shared.font);
         self.draw_plates(shared, g);
         self.draw_cards(shared, g);
         self.draw_particles(g);
@@ -50,7 +58,7 @@ impl Table {
             g.scale(p.pop.value, p.pop.value);
             g.translate(-c.x, -c.y);
             ui::panel(g, Rect::centered(c.x, c.y, 160.0, 150.0), palette::PANEL);
-            Text::new("PAUSED", c.x, 116.0).scale(2.0).center().draw(g, &shared.font);
+            Text::new("PAUSED", c.x, 116.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, &shared.font);
             for (_, b) in &p.buttons {
                 b.draw(g, &shared.font);
             }
@@ -118,123 +126,156 @@ impl Table {
         }
     }
 
-    fn draw_sidebar(&self, shared: &Shared, g: &mut Graphics) {
+    /// The score pad: a tilted sheet of ruled paper with WE / THEY columns,
+    /// the score in pencil (a number plus tally marks toward the target), the
+    /// tricks taken this hand as pencil dots, and a note at the bottom.
+    pub(super) fn draw_scorepad(&self, shared: &Shared, g: &mut Graphics) {
         let font = &shared.font;
         let r = &self.game.round;
-        ui::panel(g, SIDEBAR, palette::PANEL);
-        let cx = SIDEBAR.center().x;
+        let (w, h) = (PAD.w, PAD.h);
+        g.push();
+        let c = PAD.center();
+        g.translate(c.x, c.y);
+        g.rotate(PAD_TILT);
+        g.translate(-w / 2.0, -h / 2.0);
 
-        Text::new("EUCHRE", cx, 20.0).scale(1.5).color(palette::GOLD).center().draw(g, font);
-        let info = format!("HAND {}  ·  TO {}", self.game.hand_number, self.game.target);
-        Text::new(&info, cx, 36.0).color(palette::MUTED).center().draw(g, font);
+        // Shadow, a sheet peeking out underneath, then the top sheet.
+        g.set_color(palette::INK.with_alpha(0.45));
+        g.rectangle(Fill, 3.0, 4.0, w, h);
+        g.push();
+        g.rotate(0.03);
+        g.set_color(palette::INK);
+        g.rectangle(Fill, 1.0, -1.0, w + 2.0, h + 2.0);
+        g.set_color(palette::PAPER_SHADE);
+        g.rectangle(Fill, 2.0, 0.0, w, h);
+        g.pop();
+        g.set_color(palette::INK);
+        g.rectangle(Fill, -1.0, -1.0, w + 2.0, h + 2.0);
+        g.set_color(palette::PAPER);
+        g.rectangle(Fill, 0.0, 0.0, w, h);
+        g.set_color(palette::PAPER_RULE.with_alpha(0.7));
+        let mut y = 20.0;
+        while y < h - 3.0 {
+            g.rectangle(Fill, 2.0, y, w - 4.0, 1.0);
+            y += 11.0;
+        }
+        // Gummed binding strip along the top.
+        g.set_color(palette::RED_DARK);
+        g.rectangle(Fill, 0.0, 0.0, w, 6.0);
+        g.set_color(palette::RED);
+        g.rectangle(Fill, 0.0, 0.0, w, 1.0);
+        g.set_color(palette::INK.with_alpha(0.5));
+        g.rectangle(Fill, 0.0, 6.0, w, 1.0);
+        // Column divider, drawn in pencil.
+        g.set_color(palette::PENCIL.with_alpha(0.55));
+        g.rectangle(Fill, (w / 2.0).round(), 10.0, 1.0, h - 24.0);
 
-        // Scores.
+        let target = self.game.target.max(1);
         for team in 0..2 {
-            let x = 12.0 + team as f32 * 66.0;
-            let rect = Rect::new(x, 46.0, 60.0, 62.0);
-            ui::inset(g, rect, palette::PANEL_DARK);
-            g.set_color(team_color(team));
-            g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, 13.0, 3.0);
-            let label = if team == 0 { "US" } else { "THEM" };
-            Text::new(label, rect.center().x, rect.y + 7.0).center().draw(g, font);
+            let cx = (w * (0.25 + 0.5 * team as f32)).round();
+            let (label, ink) = if team == 0 { ("WE", palette::US_INK) } else { ("THEY", palette::THEM_INK) };
+            Text::new(label, cx, 14.0).color(ink).no_shadow().center().draw(g, font);
             let pop = self.score_pop[team].value;
-            Text::new(&self.score_shown[team].to_string(), rect.center().x, rect.y + 37.0)
-                .scale(3.0 * pop)
+            Text::new(&self.score_shown[team].to_string(), cx, 31.0)
+                .scale(2.0 * pop)
+                .color(palette::PENCIL)
+                .no_shadow()
                 .center()
                 .draw(g, font);
-            // Progress pips toward the target score.
-            let target = self.game.target.max(1);
-            let filled = self.score_shown[team].min(target);
-            let pip_w = ((rect.w - 8.0) / target as f32).floor();
-            let start = rect.center().x - pip_w * target as f32 / 2.0;
-            for i in 0..target {
-                let c = if i < filled { team_color(team) } else { palette::PANEL_LIGHT };
-                g.set_color(c);
-                g.rectangle(Fill, start + i as f32 * pip_w, rect.y + rect.h - 7.0, pip_w - 1.0, 3.0);
+            tallies(g, cx, 44.0, self.score_shown[team].min(target), target);
+
+            // Tricks this hand: a filled pencil dot per trick, faint rings for the rest.
+            let won = r.team_tricks(team);
+            let tpop = self.trick_pop[team].value;
+            for i in 0..5u8 {
+                let x = cx + (i as f32 - 2.0) * 9.0;
+                if i < won {
+                    let rad = if i + 1 == won { 3.0 * tpop } else { 3.0 };
+                    g.set_color(ink);
+                    g.circle(Fill, x, 64.0, rad);
+                } else {
+                    g.set_color(palette::PENCIL_LIGHT.with_alpha(0.6));
+                    g.set_line_width(1.0);
+                    g.circle(Line, x, 64.0, 2.5);
+                }
             }
         }
 
-        // Trump.
-        let trump_rect = Rect::new(12.0, 114.0, 126.0, 82.0);
-        ui::inset(g, trump_rect, palette::PANEL_DARK);
-        Text::new("TRUMP", trump_rect.center().x, trump_rect.y + 8.0)
-            .color(palette::MUTED)
-            .center()
-            .draw(g, font);
-        let tc = trump_rect.center().x;
+        let note = if r.maker.is_some() && r.phase != Phase::NameTrump {
+            if r.maker.map(team_of) == Some(0) { "we need 3 tricks".to_string() } else { "hold them to 2!".to_string() }
+        } else {
+            format!("hand {}  ·  to {}", self.game.hand_number, self.game.target)
+        };
+        Text::new(&note, w / 2.0, 78.0).color(palette::PENCIL_LIGHT).no_shadow().center().draw(g, font);
+        g.pop();
+    }
+
+    /// The brass trump medallion with a ribbon, and who called it beneath.
+    fn draw_trump(&self, shared: &Shared, g: &mut Graphics) {
+        let font = &shared.font;
+        let r = &self.game.round;
+        let m = MEDALLION;
+        let rad = 23.0;
+        g.set_color(palette::INK.with_alpha(0.5));
+        g.circle(Fill, m.x + 2.0, m.y + 3.0, rad + 3.0);
+        g.set_color(palette::INK);
+        g.circle(Fill, m.x, m.y, rad + 3.0);
+        g.set_color(palette::BRASS_DARK);
+        g.circle(Fill, m.x, m.y, rad + 2.0);
+        g.set_color(palette::BRASS);
+        g.circle(Fill, m.x, m.y - 1.0, rad + 1.0);
+        g.set_color(palette::BRASS_LIGHT.with_alpha(0.8));
+        g.set_line_width(1.0);
+        g.arc(Line, m.x, m.y - 1.0, rad, PI * 1.1, PI * 1.6);
+        g.set_color(palette::INK);
+        g.circle(Fill, m.x, m.y, rad - 3.0);
+        g.set_color(palette::PANEL_DARK);
+        g.circle(Fill, m.x, m.y, rad - 4.0);
+
+        let (ribbon, ribbon_color) = match (r.trump, r.alone) {
+            (Some(_), true) => ("ALONE!", palette::ORANGE),
+            _ => ("TRUMP", palette::RED),
+        };
         match (r.trump, r.maker) {
             (Some(trump), Some(maker)) => {
                 let pop = self.trump_pop.value;
                 let wob = (shared.time * 2.0).sin() * 0.05;
                 let color = crate::cards::suit_color_on_dark(trump);
-                shared.cards.draw_suit(g, trump, vec2(tc, trump_rect.y + 36.0), 3.0 * pop, wob, color);
-                let who = if maker == HUMAN { "YOU".to_string() } else { NAMES[maker].to_string() };
-                Text::new(&format!("CALLED BY {who}"), tc, trump_rect.y + 62.0)
-                    .center()
-                    .draw(g, font);
-                if r.alone {
-                    let a = 0.75 + 0.25 * (shared.time * 5.0).sin();
-                    Text::new("GOING ALONE", tc, trump_rect.y + 73.0)
-                        .color(palette::ORANGE.with_alpha(a))
-                        .center()
-                        .draw(g, font);
-                }
+                shared.cards.draw_suit(g, trump, vec2(m.x, m.y - 2.0), 2.2 * pop, wob, color);
+                let who = if maker == HUMAN { "YOU" } else { NAMES[maker] };
+                Text::new(&format!("BY {who}"), m.x, m.y + rad + 18.0).center().draw(g, font);
             }
             _ => {
-                Text::new("?", tc, trump_rect.y + 34.0)
-                    .scale(4.0)
-                    .color(palette::DIM)
-                    .center()
-                    .draw(g, font);
+                Text::new("?", m.x, m.y - 2.0).scale(3.0).color(palette::DIM).center().draw(g, font);
                 let line = if r.phase == Phase::NameTrump {
                     format!("{} turned down", r.up_card.suit.symbol())
                 } else {
                     "deciding...".to_string()
                 };
-                Text::new(&line, tc, trump_rect.y + 64.0)
-                    .color(palette::MUTED)
-                    .center()
-                    .draw(g, font);
+                Text::new(&line, m.x, m.y + rad + 18.0).color(palette::MUTED).center().draw(g, font);
             }
         }
-
-        // Tricks this hand.
-        let tr = Rect::new(12.0, 200.0, 126.0, 52.0);
-        ui::inset(g, tr, palette::PANEL_DARK);
-        Text::new("TRICKS", tr.center().x, tr.y + 8.0).color(palette::MUTED).center().draw(g, font);
-        for team in 0..2 {
-            let y = tr.y + 22.0 + team as f32 * 16.0;
-            let label = if team == 0 { "US" } else { "THEM" };
-            Text::new(label, tr.x + 8.0, y).color(team_color(team)).anchor(0.0, 0.5).draw(g, font);
-            let won = r.team_tricks(team);
-            let pop = self.trick_pop[team].value;
-            for i in 0..5u8 {
-                let px = tr.x + 48.0 + i as f32 * 14.0;
-                let filled = i < won;
-                let s = if filled && i + 1 == won { 10.0 * pop } else { 10.0 };
-                g.set_color(palette::INK);
-                g.rounded_rectangle(Fill, px - s / 2.0, y - s / 2.0 + 1.0, s, s, 2.0);
-                g.set_color(if filled { team_color(team) } else { palette::PANEL_LIGHT });
-                g.rounded_rectangle(Fill, px - s / 2.0, y - s / 2.0, s, s - 1.0, 2.0);
-            }
+        // A ribbon across the bottom of the medallion, with folded tails.
+        let rw = font.width(ribbon) + 12.0;
+        let rr = Rect::centered(m.x, m.y + rad + 1.0, rw, 11.0);
+        let pulse = if r.alone { 0.15 + 0.15 * (shared.time * 5.0).sin() } else { 0.0 };
+        let dark = ribbon_color.lerp(palette::INK, 0.45);
+        for (x, dir) in [(rr.x, -1.0), (rr.x + rr.w, 1.0)] {
+            let (x0, x1) = (x - dir * 2.0, x + dir * 7.0);
+            let (top, bot) = (rr.y + 2.0, rr.y + rr.h + 2.0);
+            let notch = x1 - dir * 3.0;
+            g.set_color(palette::INK);
+            g.polygon(Fill, &[x0, top - 1.0, x1 + dir, top - 1.0, notch + dir, (top + bot) / 2.0, x1 + dir, bot + 1.0, x0, bot + 1.0]);
+            g.set_color(dark);
+            g.polygon(Fill, &[x0, top, x1, top, notch, (top + bot) / 2.0, x1, bot, x0, bot]);
         }
-        if r.maker.is_some() && r.phase != Phase::NameTrump {
-            let need = r.maker.map(team_of).unwrap_or(0);
-            let msg = if need == 0 { "We need 3 tricks" } else { "Hold them to 2!" };
-            Text::new(msg, tr.center().x, tr.y + tr.h + 8.0).color(palette::MUTED).center().draw(g, font);
-        }
-
-        // Dealer and teams.
-        let dr = Rect::new(12.0, 272.0, 126.0, 50.0);
-        ui::inset(g, dr, palette::PANEL_DARK);
-        let dealer = if r.dealer == HUMAN { "YOU".to_string() } else { NAMES[r.dealer].to_string() };
-        Text::new("DEALER", dr.x + 8.0, dr.y + 10.0).color(palette::MUTED).anchor(0.0, 0.5).draw(g, font);
-        Text::new(&dealer, dr.x + dr.w - 8.0, dr.y + 10.0).color(palette::GOLD).anchor(1.0, 0.5).draw(g, font);
-        let cx = dr.center().x;
-        Text::new("YOU & BENNY", cx, dr.y + 25.0).color(palette::US).center().draw(g, font);
-        Text::new("ROSA & JULES", cx, dr.y + 39.0).color(palette::THEM).center().draw(g, font);
-
-        self.menu_button.draw(g, font);
+        g.set_color(palette::INK);
+        g.rectangle(Fill, rr.x - 1.0, rr.y - 1.0, rr.w + 2.0, rr.h + 2.0);
+        g.set_color(ribbon_color.lerp(palette::WHITE, pulse));
+        g.rectangle(Fill, rr.x, rr.y, rr.w, rr.h);
+        g.set_color(ribbon_color.lerp(palette::WHITE, 0.3));
+        g.rectangle(Fill, rr.x, rr.y, rr.w, 1.0);
+        Text::new(ribbon, m.x, rr.center().y).center().draw(g, font);
     }
 
     fn draw_plates(&self, shared: &Shared, g: &mut Graphics) {
@@ -252,17 +293,21 @@ impl Table {
             let w = font.width(name) + 18.0;
             let rect = Rect::centered(pos.x, pos.y, w, 13.0);
             let active = waiting_on == Some(seat) && self.banner.is_none();
+            g.set_color(palette::INK.with_alpha(0.5));
+            ui::chamfer(g, Fill, rect.x + 1.0, rect.y + 2.0, rect.w, rect.h, 3.0);
             if active {
                 let pulse = 0.55 + 0.45 * (shared.time * 6.0).sin();
-                g.set_color(palette::GOLD.with_alpha(pulse));
-                g.rounded_rectangle(Fill, rect.x - 2.0, rect.y - 2.0, rect.w + 4.0, rect.h + 4.0, 4.0);
+                g.set_color(palette::BRASS_LIGHT.with_alpha(pulse));
+                ui::chamfer(g, Fill, rect.x - 3.0, rect.y - 3.0, rect.w + 6.0, rect.h + 6.0, 5.0);
             }
-            g.set_color(palette::INK.with_alpha(0.5));
-            g.rounded_rectangle(Fill, rect.x + 1.0, rect.y + 2.0, rect.w, rect.h, 3.0);
-            g.set_color(palette::PANEL_DARK);
-            g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, rect.h, 3.0);
+            g.set_color(palette::INK);
+            ui::chamfer(g, Fill, rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0, 4.0);
+            g.set_color(palette::PANEL);
+            ui::chamfer(g, Fill, rect.x, rect.y, rect.w, rect.h, 3.0);
+            // Team color as an arrow-shaped notch on the left edge.
+            let (l, t, b, cy) = (rect.x + 3.0, rect.y + 3.0, rect.y + rect.h - 3.0, rect.center().y);
             g.set_color(team_color(team_of(seat)));
-            g.rounded_rectangle(Fill, rect.x + 3.0, rect.y + 3.0, 5.0, rect.h - 6.0, 1.0);
+            g.polygon(Fill, &[l, t, l + 4.0, t, l + 6.0, cy, l + 4.0, b, l, b]);
             let color = if out { palette::DIM } else { palette::CREAM };
             Text::new(name, rect.x + 12.0, rect.center().y).color(color).anchor(0.0, 0.5).draw(g, font);
 
@@ -271,9 +316,11 @@ impl Table {
             let mut bx = if seat == 3 { rect.x - 8.0 } else { rect.x + rect.w + 8.0 };
             if r.dealer == seat {
                 g.set_color(palette::INK);
-                g.circle(Fill, bx, rect.center().y + 1.0, 6.0);
-                g.set_color(palette::GOLD);
+                g.circle(Fill, bx, rect.center().y + 0.5, 7.0);
+                g.set_color(palette::BRASS_DARK);
                 g.circle(Fill, bx, rect.center().y, 6.0);
+                g.set_color(palette::BRASS);
+                g.circle(Fill, bx, rect.center().y - 0.5, 5.0);
                 Text::new("D", bx + 0.5, rect.center().y)
                     .color(palette::INK)
                     .no_shadow()
@@ -283,8 +330,10 @@ impl Table {
             }
             if r.maker == Some(seat)
                 && let Some(trump) = r.trump {
+                    g.set_color(palette::INK);
+                    ui::chamfer(g, Fill, bx - 7.0, rect.y - 1.0, 14.0, 15.0, 3.0);
                     g.set_color(palette::CREAM);
-                    g.rounded_rectangle(Fill, bx - 6.0, rect.y, 12.0, 13.0, 2.0);
+                    ui::chamfer(g, Fill, bx - 6.0, rect.y, 12.0, 13.0, 2.0);
                     Text::new(&trump.symbol().to_string(), bx, rect.center().y)
                         .color(crate::cards::suit_color(trump))
                         .plain_suits()
@@ -311,12 +360,30 @@ impl Table {
             g.translate(anchor.x, anchor.y);
             g.scale(b.pop.value, b.pop.value);
             let rect = Rect::new(-w * ax, -h / 2.0, w, h);
+            // A tail pointing back at the speaker: down for you, left for the
+            // west seat, up for your partner, right for the east seat.
+            let (hh, r0, r1) = (h / 2.0, rect.x, rect.x + rect.w);
+            let tail: [f32; 6] = match seat {
+                0 => [-4.0, hh - 1.0, 4.0, hh - 1.0, 0.0, hh + 5.0],
+                1 => [r0 + 1.0, -4.0, r0 + 1.0, 4.0, r0 - 5.0, 0.0],
+                2 => [-4.0, -hh + 1.0, 4.0, -hh + 1.0, 0.0, -hh - 5.0],
+                _ => [r1 - 1.0, -4.0, r1 - 1.0, 4.0, r1 + 5.0, 0.0],
+            };
+            // The same triangle grown by a pixel, for its outline.
+            let (mx, my) = ((tail[0] + tail[2] + tail[4]) / 3.0, (tail[1] + tail[3] + tail[5]) / 3.0);
+            let mut outline_tail = tail;
+            for i in 0..3 {
+                outline_tail[i * 2] = mx + (tail[i * 2] - mx) * 1.6;
+                outline_tail[i * 2 + 1] = my + (tail[i * 2 + 1] - my) * 1.6;
+            }
             g.set_color(palette::INK.with_alpha(0.5 * fade));
-            g.rounded_rectangle(Fill, rect.x + 1.0, rect.y + 2.0, rect.w, rect.h, 4.0);
+            ui::chamfer(g, Fill, rect.x + 1.0, rect.y + 2.0, rect.w, rect.h, 3.0);
             g.set_color(palette::INK.with_alpha(fade));
-            g.rounded_rectangle(Fill, rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0, 5.0);
+            ui::chamfer(g, Fill, rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0, 4.0);
+            g.polygon(Fill, &outline_tail);
             g.set_color(palette::CREAM.with_alpha(fade));
-            g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, rect.h, 4.0);
+            ui::chamfer(g, Fill, rect.x, rect.y, rect.w, rect.h, 3.0);
+            g.polygon(Fill, &tail);
             Text::new(&b.text, rect.center().x, 0.0)
                 .color(palette::INK.with_alpha(fade))
                 .no_shadow()
@@ -334,7 +401,7 @@ impl Table {
             let wob = (t * 30.0).sin() * (t - 1.9).max(0.0) * 6.0;
             let w = font.width(hint) + 16.0;
             g.set_color(palette::INK.with_alpha(0.7));
-            g.rounded_rectangle(Fill, (CENTER.x + wob - w / 2.0).round(), PROMPT_Y - 7.0, w, 15.0, 4.0);
+            ui::chamfer(g, Fill, (CENTER.x + wob - w / 2.0).round(), PROMPT_Y - 7.0, w, 15.0, 3.0);
             Text::new(hint, CENTER.x + wob, PROMPT_Y).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
         } else {
             let text = match self.prompt {
@@ -379,8 +446,8 @@ impl Table {
             if !text.is_empty() {
                 let bob = ((shared.time * 3.0).sin() * 0.6).round();
                 let w = font.width(&text) + 16.0;
-                g.set_color(palette::INK.with_alpha(0.55));
-                g.rounded_rectangle(Fill, (CENTER.x - w / 2.0).round(), PROMPT_Y - 7.0 + bob, w, 15.0, 4.0);
+                g.set_color(palette::INK.with_alpha(0.6));
+                ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), PROMPT_Y - 7.0 + bob, w, 15.0, 3.0);
                 Text::new(&text, CENTER.x, PROMPT_Y + bob).color(palette::CREAM).center().draw(g, font);
             }
         }
@@ -402,11 +469,16 @@ impl Table {
         let rect = Rect::centered(0.0, 0.0, (text_w + 62.0).max(196.0), 46.0);
         let text_x = (rect.x + 45.0 + rect.x + rect.w - 12.0) / 2.0;
         g.set_color(palette::INK.with_alpha(0.5 * fade));
-        g.rounded_rectangle(Fill, rect.x + 2.0, rect.y + 3.0, rect.w, rect.h, 5.0);
-        g.set_color(palette::GOLD.with_alpha(fade));
-        g.rounded_rectangle(Fill, rect.x - 1.0, rect.y - 1.0, rect.w + 2.0, rect.h + 2.0, 6.0);
+        ui::chamfer(g, Fill, rect.x + 2.0, rect.y + 3.0, rect.w, rect.h, 5.0);
+        g.set_color(palette::INK.with_alpha(fade));
+        ui::chamfer(g, Fill, rect.x - 3.0, rect.y - 3.0, rect.w + 6.0, rect.h + 6.0, 7.0);
+        g.set_color(palette::BRASS.with_alpha(fade));
+        ui::chamfer(g, Fill, rect.x - 2.0, rect.y - 2.0, rect.w + 4.0, rect.h + 4.0, 6.0);
         g.set_color(palette::PANEL.with_alpha(fade));
-        g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, rect.h, 5.0);
+        ui::chamfer(g, Fill, rect.x, rect.y, rect.w, rect.h, 5.0);
+        // The suit sits in its own dark well on the left.
+        g.set_color(palette::PANEL_DARK.with_alpha(fade));
+        ui::chamfer(g, Fill, rect.x + 4.0, rect.y + 4.0, 36.0, rect.h - 8.0, 3.0);
         let color = crate::cards::suit_color_on_dark(t.suit).with_alpha(fade);
         let wob = (shared.time * 3.0).sin() * 0.08;
         shared.cards.draw_suit(g, t.suit, vec2(rect.x + 22.0, -1.0), 2.0, wob, color);
@@ -430,8 +502,9 @@ impl Table {
 
     fn draw_banner(&self, shared: &Shared, g: &mut Graphics, b: &super::Banner) {
         let font = &shared.font;
-        g.set_color(palette::INK.with_alpha((b.age * 3.0).min(1.0) * 0.35));
-        g.rectangle(Fill, 150.0, 0.0, 490.0, 360.0);
+        ui::dim_screen(g, (b.age * 3.0).min(1.0) * 0.4);
+        // Keep the score pad lit above the dim so the points visibly tick up.
+        self.draw_scorepad(shared, g);
         g.push();
         let c = CENTER + vec2(0.0, 8.0);
         g.translate(c.x, c.y);
@@ -441,8 +514,6 @@ impl Table {
         let text_w = (font.width(b.title) * 2.5).max(font.width(&b.detail)).max(font.width(&b.points) * 1.5);
         let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, 470.0), 112.0);
         ui::panel(g, rect, palette::PANEL);
-        g.set_color(b.color);
-        g.rounded_rectangle(Fill, rect.x, rect.y, rect.w, 4.0, 2.0);
         Text::new(b.title, c.x, rect.y + 23.0)
             .scale(2.5)
             .color(b.color)
@@ -509,4 +580,27 @@ fn outline(g: &mut Graphics, pose: Pose, color: Color, width: f32) {
     g.rounded_rectangle(Line, -hw - 1.0, -hh - 1.0, hw * 2.0 + 2.0, hh * 2.0 + 2.0, 3.0);
     g.set_line_width(1.0);
     g.pop();
+}
+
+/// Pencil tally marks centered on `cx`: groups of four strokes crossed by a
+/// fifth, with the rest of the way to `target` sketched in very faintly.
+fn tallies(g: &mut Graphics, cx: f32, y: f32, n: u32, target: u32) {
+    let group_w = 17.0;
+    let groups = target.div_ceil(5) as f32;
+    let start = (cx - (groups * group_w - 5.0) / 2.0).round();
+    g.set_line_width(1.0);
+    for i in 0..target {
+        let (grp, k) = ((i / 5) as f32, i % 5);
+        let x0 = start + grp * group_w;
+        // A little hand-drawn unevenness per stroke.
+        let wob = ((i * 7 % 3) as f32 - 1.0) * 0.5;
+        let color = if i < n { palette::PENCIL } else { palette::PENCIL_LIGHT.with_alpha(0.14) };
+        g.set_color(color);
+        if k < 4 {
+            let x = x0 + 1.0 + k as f32 * 3.0;
+            g.rectangle(Fill, x, y + wob.max(0.0), 1.0, 9.0 - wob.abs());
+        } else {
+            g.line(x0 - 1.0, y + 7.5, x0 + 12.0, y + 1.5);
+        }
+    }
 }

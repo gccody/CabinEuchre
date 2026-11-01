@@ -15,7 +15,7 @@ use crate::scenes::table::Table;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
 use crate::sfx::Sound;
 use crate::text::Text;
-use crate::ui::{self, Button, Rect};
+use crate::ui::{Button, Rect};
 
 const TITLE: &str = "EUCHRE";
 const CX: f32 = VIEW_W as f32 / 2.0;
@@ -63,7 +63,7 @@ impl Title {
             .enumerate()
             .map(|(i, &suit)| {
                 let k = i as f32 - 1.5;
-                let home = vec2(CX + k * 40.0, 100.0 + k * k * 4.0);
+                let home = vec2(CX + k * 40.0, 80.0 + k * k * 4.0);
                 let angle = k * 0.14;
                 // Cards start below the screen and fly up, staggered.
                 let mut y = card_spring(VIEW_H as f32 + 60.0 + i as f32 * 40.0);
@@ -84,12 +84,13 @@ impl Title {
             })
             .collect();
         let letters = (0..TITLE.len()).map(|_| Spring::new(0.0)).collect();
-        let row_y = 268.0;
+        // A single column of plaques under the logo.
+        let w = 112.0;
         let buttons = vec![
-            (Choice::Play, Button::blue("PLAY", Rect::centered(CX, row_y, 104.0, 30.0)).scaled(1.5)),
-            (Choice::Options, Button::orange("OPTIONS", Rect::centered(CX - 118.0, row_y + 4.0, 92.0, 22.0))),
-            (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX + 118.0, row_y + 4.0, 92.0, 22.0))),
-            (Choice::Quit, Button::red("QUIT", Rect::centered(CX, row_y + 34.0, 60.0, 18.0))),
+            (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 226.0, w + 24.0, 26.0)).scaled(1.5)),
+            (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 259.0, w, 18.0))),
+            (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 283.0, w, 18.0))),
+            (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 307.0, w, 18.0))),
         ];
         Title {
             cards,
@@ -183,12 +184,14 @@ impl Scene for Title {
             shared.cards.draw(g, face, pose, Color::WHITE);
         }
 
-        // Logo: letters bob and tilt on their own phase, with a thick outline.
+        // Logo: cream letters with a brass extrusion and a thick dark outline,
+        // each bobbing and tilting on its own phase.
         let scale = 4.5;
+        let depth = 4;
         let widths: Vec<f32> = TITLE.chars().map(|ch| font.width(&ch.to_string()) + 2.0).collect();
         let total = (widths.iter().sum::<f32>() - 2.0) * scale;
         let mut x = CX - total / 2.0;
-        let cy = 182.0;
+        let cy = 150.0;
         for (i, ch) in TITLE.chars().enumerate() {
             let s = ch.to_string();
             let w = widths[i] * scale;
@@ -196,38 +199,36 @@ impl Scene for Title {
             let lx = x + (w - 2.0 * scale) / 2.0;
             let ly = cy + juice::wobble(t, i as f32, 2.2, 3.0);
             let rot = juice::wobble(t, i as f32 + 7.0, 1.7, 0.05);
-            let color = if i % 2 == 0 { palette::CREAM } else { palette::GOLD };
             if pop > 0.01 {
-                for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
-                    Text::new(&s, lx + dx * 2.0, ly + dy * 2.0)
-                        .scale(scale * pop)
-                        .rotation(rot)
-                        .center()
-                        .color(palette::INK)
-                        .no_shadow()
-                        .draw(g, font);
+                let letter = |x: f32, y: f32, color: Color| {
+                    Text::new(&s, x, y).scale(scale * pop).rotation(rot).center().color(color).no_shadow()
+                };
+                // Outline around both the face and the back of the extrusion.
+                for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                    for d in [0, depth] {
+                        let ox = lx + dx * 2.0 + d as f32 * 0.5;
+                        let oy = ly + dy * 2.0 + d as f32;
+                        letter(ox, oy, palette::INK).draw(g, font);
+                    }
                 }
-                Text::new(&s, lx, ly)
-                    .scale(scale * pop)
-                    .rotation(rot)
-                    .center()
-                    .color(color)
-                    .shadow(palette::INK.with_alpha(0.6))
-                    .draw(g, font);
+                for d in (1..=depth).rev() {
+                    let c = if d == 1 { palette::BRASS } else { palette::BRASS_DARK };
+                    letter(lx + d as f32 * 0.5, ly + d as f32, c).draw(g, font);
+                }
+                letter(lx, ly, palette::CREAM).draw(g, font);
             }
             x += w;
         }
-        Text::new("A TRICK-TAKING CARD GAME", CX, 218.0)
-            .color(palette::CREAM)
+        Text::new("♣  A TRICK-TAKING CARD GAME  ♥", CX, 186.0)
+            .color(palette::BRASS_LIGHT)
             .center()
             .draw(g, font);
 
-        ui::panel(g, Rect::centered(CX, 284.0, 360.0, 74.0), palette::PANEL_DARK.with_alpha(0.85));
         for (_, b) in &self.buttons {
             b.draw(g, font);
         }
 
-        Text::new("F2: CRT   F11: Fullscreen   Esc: Quit", 6.0, VIEW_H as f32 - 12.0)
+        Text::new("F2: Lamplight   F11: Fullscreen   Esc: Quit", 6.0, VIEW_H as f32 - 12.0)
             .color(palette::MUTED)
             .draw(g, font);
 

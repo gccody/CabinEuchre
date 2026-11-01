@@ -258,7 +258,7 @@ impl Table {
             game_over: None,
             pause: None,
             overlay: None,
-            menu_button: Button::grey("MENU", Rect::new(14.0, 330.0, 124.0, 16.0)),
+            menu_button: Button::grey("MENU", Rect::new(578.0, 332.0, 50.0, 16.0)),
             shake: 0.0,
             particles: Vec::new(),
             winner_glow: None,
@@ -594,9 +594,9 @@ impl Table {
             (ResultKind::Made, _, false) => "THEY MADE IT",
         };
         let color = match (result.kind, we_scored) {
-            (ResultKind::Made, true) => palette::BLUE,
+            (ResultKind::Made, true) => palette::US,
             (_, true) => palette::GOLD,
-            (_, false) => palette::RED,
+            (_, false) => palette::THEM,
         };
         let verb = if result.alone { "went alone in" } else { "called" };
         let detail = format!("{maker_name} {verb} {trump} and took {} of 5 tricks.", result.maker_tricks);
@@ -613,7 +613,7 @@ impl Table {
             detail,
             points,
             pop,
-            button: Button::blue(label, Rect::centered(layout::CENTER.x, layout::CENTER.y + 46.0, 96.0, 20.0)),
+            button: Button::brass(label, Rect::centered(layout::CENTER.x, layout::CENTER.y + 46.0, 96.0, 20.0)),
             age: 0.0,
         });
         let big = result.kind != ResultKind::Made;
@@ -622,7 +622,7 @@ impl Table {
         }
         if we_scored {
             shared.sfx.play(if big { Sound::Fanfare } else { Sound::Pop });
-            self.burst(vec2(44.0, 98.0), if big { 40 } else { 16 });
+            self.burst(draw::PAD_SCORE_US, if big { 40 } else { 16 });
         } else {
             shared.sfx.play(if big { Sound::Womp } else { Sound::Pop });
         }
@@ -644,15 +644,15 @@ impl Table {
             self.game_over = Some(GameOver {
                 won,
                 pop,
-                again: Button::blue("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0)),
-                menu: Button::orange("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0)),
+                again: Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0)),
+                menu: Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0)),
                 age: 0.0,
             });
             if won {
                 shared.sfx.play(Sound::Fanfare);
                 self.shake = 0.8;
                 for i in 0..5 {
-                    self.burst(vec2(220.0 + i as f32 * 85.0, 80.0), 24);
+                    self.burst(vec2(150.0 + i as f32 * 85.0, 80.0), 24);
                 }
             } else {
                 shared.sfx.play(Sound::Womp);
@@ -668,7 +668,7 @@ impl Table {
     }
 
     fn burst(&mut self, at: Vec2, count: usize) {
-        let colors = [palette::GOLD, palette::CREAM, palette::ORANGE, palette::BLUE];
+        let colors = [palette::GOLD, palette::CREAM, palette::BRASS_LIGHT, palette::US];
         for i in 0..count {
             let a = random_range(0.0, std::f32::consts::TAU);
             let speed = random_range(40.0, 150.0);
@@ -811,8 +811,8 @@ impl Table {
         let w = 120.0;
         self.pause = Some(Pause {
             buttons: vec![
-                (PauseChoice::Resume, Button::blue("RESUME", Rect::centered(cx, 140.0, w, 20.0))),
-                (PauseChoice::Options, Button::orange("OPTIONS", Rect::centered(cx, 166.0, w, 20.0))),
+                (PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 140.0, w, 20.0))),
+                (PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 166.0, w, 20.0))),
                 (PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 192.0, w, 20.0))),
                 (PauseChoice::Quit, Button::red("MAIN MENU", Rect::centered(cx, 218.0, w, 20.0))),
             ],

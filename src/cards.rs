@@ -431,14 +431,43 @@ fn paint_face(p: &mut Painter, card: Card) {
     }
 }
 
+/// A pine tree for the badge on the card back.
+const PINE: &[&str] = &[
+    ".....#.....",
+    "....###....",
+    "...#####...",
+    "....###....",
+    "...#####...",
+    "..#######..",
+    "....###....",
+    "..#######..",
+    ".#########.",
+    "...#####...",
+    ".#########.",
+    "###########",
+    ".....#.....",
+    ".....#.....",
+];
+
 fn paint_back(p: &mut Painter) {
     p.card_base(palette::BACK, palette::BACK_DARK);
-    // Diamond lattice inside a cream border.
-    for y in 6..H - 6 {
-        for x in 6..W - 6 {
-            if (x + y) % 10 == 0 || (x - y + 100) % 10 == 0 {
-                p.px(x, y, palette::BACK_DARK);
-            }
+    // Buffalo check: black bands cross red ones; where only one band runs the
+    // weave reads as a dark red, with a twill hatch on the dark squares.
+    let block = 8;
+    for y in 2..H - 3 {
+        for x in 2..W - 2 {
+            let bx = ((x - 2) / block) % 2 == 1;
+            let by = ((y - 2) / block) % 2 == 1;
+            let c = match (bx, by) {
+                (true, true) => {
+                    if (x + y) % 4 == 0 { palette::BACK_DARK } else { palette::BACK_BLACK }
+                }
+                (true, false) | (false, true) => {
+                    if (x + y) % 2 == 0 { palette::BACK_BLACK } else { palette::BACK_DARK }
+                }
+                (false, false) => palette::BACK,
+            };
+            p.px(x, y, c);
         }
     }
     let cream = palette::CREAM;
@@ -446,13 +475,24 @@ fn paint_back(p: &mut Painter) {
     p.rect(4, H - 5, W - 8, 1, cream);
     p.rect(4, 4, 1, H - 8, cream);
     p.rect(W - 5, 4, 1, H - 8, cream);
-    // Emblem: an outlined gold diamond with a cream glint.
-    let size = 27;
-    let (ex, ey) = (W / 2 - size / 2, H / 2 - size / 2);
-    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-2, 0), (2, 0), (0, -2), (0, 2)] {
-        p.pip(Suit::Diamonds, ex + dx, ey + dy, size as u32, false, palette::INK);
+    // Badge: a cream oval with a brass ring and a pine tree.
+    let (cx, cy) = (W / 2, H / 2);
+    for yy in -18..=18i32 {
+        for xx in -15..=15i32 {
+            let d = ((xx * xx) as f32 / (14.5 * 14.5) + (yy * yy) as f32 / (17.5 * 17.5)).sqrt();
+            let c = if d <= 0.8 {
+                Some(cream)
+            } else if d <= 0.9 {
+                Some(palette::BRASS)
+            } else if d <= 1.0 {
+                Some(palette::INK)
+            } else {
+                None
+            };
+            if let Some(c) = c {
+                p.px(cx + xx, cy + yy, c);
+            }
+        }
     }
-    p.pip(Suit::Diamonds, ex, ey, size as u32, false, palette::GOLD);
-    p.pip(Suit::Diamonds, W / 2 - 5, H / 2 - 5, 11, false, palette::CREAM);
-    p.pip(Suit::Diamonds, W / 2 - 3, H / 2 - 3, 7, false, palette::GOLD);
+    p.glyph(cx - 5, cy - 7, PINE, 1, false, palette::GREEN_DARK);
 }

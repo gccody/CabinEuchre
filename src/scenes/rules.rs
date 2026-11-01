@@ -79,7 +79,7 @@ const PAGES: &[Page] = &[
                O order up, P pass, A alone, C D S H name a suit.\n\
                Space or Enter continues after a hand.\n\
                Esc pauses the game.\n\n\
-               F2 toggles the CRT effect. F11 toggles fullscreen.\n\
+               F2 toggles the lamplight effect. F11 toggles fullscreen.\n\
                Change speed, volume and house rules in Options.",
         cards: &[],
     },
@@ -103,7 +103,7 @@ impl RulesPanel {
             page: 0,
             prev: Button::grey("<", Rect::centered(PANEL.x + 30.0, y, 30.0, 18.0)),
             next: Button::blue(">", Rect::centered(PANEL.x + PANEL.w - 30.0, y, 30.0, 18.0)),
-            close: Button::orange("CLOSE", Rect::centered(PANEL.center().x, y, 76.0, 18.0)),
+            close: Button::brass("CLOSE", Rect::centered(PANEL.center().x, y, 76.0, 18.0)),
             pop,
             page_pop: Spring::new(1.0),
         }
@@ -206,7 +206,7 @@ impl RulesPanel {
             let pose = Pose::new(x, y, rot, 1.0, 1.0);
             shared.cards.draw(g, None, pose.offset(2.0, 3.0), palette::INK.with_alpha(0.5));
             shared.cards.draw(g, Some(card), pose, Color::WHITE);
-            Text::new(caption, x, y + 39.0).color(palette::GOLD).center().draw(g, font);
+            Text::new(caption, x, y + 39.0).color(palette::BRASS_LIGHT).center().draw(g, font);
         }
 
         Text::new(&format!("{} / {}", self.page + 1, PAGES.len()), PANEL.x + 72.0, PANEL.y + PANEL.h - 22.0)
@@ -220,27 +220,37 @@ impl RulesPanel {
     }
 }
 
-/// A tiny diagram of who sits where: teams in their colors around a felt oval.
+/// A tiny diagram of who sits where: name plates in their team colors around
+/// a little felt table with a brass rim.
 fn draw_seating(shared: &Shared, g: &mut Graphics, c: Vec2) {
     let font = &shared.font;
-    g.set_color(palette::FELT);
-    g.ellipse(Fill, c.x, c.y, 70.0, 30.0);
+    g.set_color(palette::INK);
+    g.ellipse(Fill, c.x, c.y + 1.0, 73.0, 33.0);
+    g.set_color(palette::BRASS_DARK);
+    g.ellipse(Fill, c.x, c.y, 72.0, 32.0);
+    g.set_color(palette::BRASS);
+    g.ellipse(Fill, c.x, c.y - 1.0, 71.0, 31.0);
     g.set_color(palette::FELT_DEEP);
-    g.ellipse(Line, c.x, c.y, 70.0, 30.0);
+    g.ellipse(Fill, c.x, c.y, 68.0, 28.0);
+    g.set_color(palette::FELT);
+    g.ellipse(Fill, c.x, c.y + 1.0, 66.0, 26.0);
     let seats = [
-        ("YOU", vec2(0.0, 36.0), palette::US),
-        ("ROSA", vec2(-96.0, 0.0), palette::THEM),
-        ("BENNY (partner)", vec2(0.0, -36.0), palette::US),
-        ("JULES", vec2(96.0, 0.0), palette::THEM),
+        ("YOU", vec2(0.0, 38.0), palette::US),
+        ("ROSA", vec2(-100.0, 0.0), palette::THEM),
+        ("BENNY (partner)", vec2(0.0, -38.0), palette::US),
+        ("JULES", vec2(100.0, 0.0), palette::THEM),
     ];
     for (name, off, color) in seats {
         let p = c + off;
-        let w = font.width(name) + 12.0;
+        let w = font.width(name) + 18.0;
         let r = Rect::centered(p.x, p.y, w, 13.0);
         g.set_color(palette::INK);
-        g.rounded_rectangle(Fill, r.x, r.y + 1.0, r.w, r.h, 3.0);
+        ui::chamfer(g, Fill, r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 3.0, 4.0);
+        g.set_color(palette::PANEL_LIGHT);
+        ui::chamfer(g, Fill, r.x, r.y, r.w, r.h, 3.0);
+        let (l, t, b) = (r.x + 3.0, r.y + 3.0, r.y + r.h - 3.0);
         g.set_color(color);
-        g.rounded_rectangle(Fill, r.x, r.y, r.w, r.h, 3.0);
-        Text::new(name, p.x, p.y).center().draw(g, font);
+        g.polygon(Fill, &[l, t, l + 4.0, t, l + 6.0, p.y, l + 4.0, b, l, b]);
+        Text::new(name, r.x + 12.0, p.y).anchor(0.0, 0.5).draw(g, font);
     }
 }

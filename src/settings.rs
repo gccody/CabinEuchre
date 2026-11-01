@@ -9,8 +9,8 @@ pub struct Settings {
     pub volume: f32,
     /// Music volume, 0..=1 (relative to master).
     pub music: f32,
-    /// CRT effect strength, 0..=1.
-    pub crt: f32,
+    /// Lamplight post-process strength (warm grade, vignette, grain), 0..=1.
+    pub atmosphere: f32,
     /// 0 = relaxed, 1 = normal, 2 = fast.
     pub speed: usize,
     pub stick_the_dealer: bool,
@@ -27,7 +27,7 @@ impl Default for Settings {
         Settings {
             volume: 0.8,
             music: 0.45,
-            crt: 1.0,
+            atmosphere: 1.0,
             speed: 1,
             stick_the_dealer: true,
             target: 10,
@@ -71,7 +71,8 @@ impl Settings {
             match k {
                 "volume" => s.volume = f.unwrap_or(s.volume).clamp(0.0, 1.0),
                 "music" => s.music = f.unwrap_or(s.music).clamp(0.0, 1.0),
-                "crt" => s.crt = f.unwrap_or(s.crt).clamp(0.0, 1.0),
+                // "crt" is the key older versions wrote for the same slider.
+                "atmosphere" | "crt" => s.atmosphere = f.unwrap_or(s.atmosphere).clamp(0.0, 1.0),
                 "speed" => s.speed = v.parse().unwrap_or(s.speed).min(2),
                 "stick_the_dealer" => s.stick_the_dealer = b,
                 "target" => s.target = v.parse().ok().filter(|t| TARGETS.contains(t)).unwrap_or(s.target),
@@ -91,8 +92,8 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "volume={}\nmusic={}\ncrt={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\n",
-            self.volume, self.music, self.crt, self.speed, self.stick_the_dealer, self.target, self.fullscreen
+            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\n",
+            self.volume, self.music, self.atmosphere, self.speed, self.stick_the_dealer, self.target, self.fullscreen
         );
         if let Err(e) = std::fs::write(&path, text) {
             crate::assets::log_warn(&format!("could not save settings: {e}"));
