@@ -340,6 +340,7 @@ impl Table {
                 }
                 self.winner_glow = None;
                 sfx.play(Sound::CardSlide);
+                shared.gather_slide();
             }
             Cue::Shuffle => {
                 for s in &mut self.sprites {
@@ -347,10 +348,12 @@ impl Table {
                     s.rot.impulse(random_range(-1.5, 1.5));
                 }
                 sfx.play(Sound::Shuffle);
+                shared.riffle();
             }
             Cue::Deal(card, seat) => {
                 self.move_card(card, Place::Hand(seat));
                 sfx.play(Sound::Deal);
+                shared.deal_flick(seat == HUMAN);
             }
             Cue::RevealUp => {
                 let up = self.game.round.up_card;
@@ -1166,6 +1169,7 @@ impl Scene for Table {
                 Nav::Up | Nav::Down => {
                     let n = p.buttons.len() as i32;
                     p.focus = (p.focus as i32 + nav.dy()).rem_euclid(n) as usize;
+                    shared.tick();
                 }
                 Nav::Confirm => {
                     let (choice, b) = &mut p.buttons[p.focus];
@@ -1190,7 +1194,10 @@ impl Scene for Table {
         }
         if let Some(go) = &mut self.game_over {
             match nav {
-                Nav::Left | Nav::Right | Nav::Up | Nav::Down => go.focus = 1 - go.focus,
+                Nav::Left | Nav::Right | Nav::Up | Nav::Down => {
+                    go.focus = 1 - go.focus;
+                    shared.tick();
+                }
                 Nav::Confirm if go.focus == 0 => {
                     go.again.flash(&shared.sfx);
                     shared.tap();
@@ -1218,6 +1225,7 @@ impl Scene for Table {
                 Nav::Left | Nav::Right => {
                     let n = self.bids.len().max(1) as i32;
                     self.bid_focus = (self.bid_focus as i32 + nav.dx()).rem_euclid(n) as usize;
+                    shared.tick();
                 }
                 Nav::Confirm => self.press_bid(self.bid_focus, shared),
                 Nav::Alt => {
@@ -1232,6 +1240,7 @@ impl Scene for Table {
                     let n = self.human_hand_order().len().max(1) as i32;
                     let i = (self.card_focus.min(n as usize - 1) as i32 + nav.dx()).rem_euclid(n);
                     self.card_focus = i as usize;
+                    shared.tick();
                     // Playable cards tick from the hover logic; unplayable ones get a dull tap.
                     if self.prompt == Prompt::Play
                         && let Some(c) = self.focused_card()

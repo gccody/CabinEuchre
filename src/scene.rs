@@ -90,8 +90,19 @@ pub struct Shared {
     pub input: InputMode,
     /// Whether a gamepad is connected (picks which control hints to show).
     pub gamepad: bool,
-    /// A rumble requested this frame as `(strength, seconds)`, played by the app.
-    pub rumble: Option<(f32, f32)>,
+    /// Rumble pulses requested this frame, scheduled and played by the app.
+    pub rumbles: Vec<Buzz>,
+}
+
+/// One controller rumble pulse. `low` is the heavy, low-frequency motor (a
+/// thump), `high` the light, high-frequency one (a buzz or a click).
+#[derive(Clone, Copy, Debug)]
+pub struct Buzz {
+    /// Seconds from now until it starts, so a scene can queue a pattern.
+    pub delay: f32,
+    pub low: f32,
+    pub high: f32,
+    pub seconds: f32,
 }
 
 impl Shared {
@@ -100,17 +111,55 @@ impl Shared {
         self.input == InputMode::Buttons
     }
 
-    /// Asks for a controller rumble (0..1 strength). Only plays if the player
-    /// is on a gamepad and has rumble enabled.
+    /// Asks for a controller rumble (0..1 strength) for the big moments. Only
+    /// plays if the player is on a gamepad and has rumble enabled.
     pub fn rumble(&mut self, strength: f32, seconds: f32) {
-        let (s, d) = self.rumble.unwrap_or((0.0, 0.0));
-        self.rumble = Some((s.max(strength), d.max(seconds)));
+        self.buzz(0.0, strength, strength * 0.6, seconds);
     }
 
-    /// The faint tap for a press that actually selected something (a menu
+    /// Queues one pulse on each motor, starting `delay` seconds from now.
+    pub fn buzz(&mut self, delay: f32, low: f32, high: f32, seconds: f32) {
+        self.rumbles.push(Buzz { delay, low, high, seconds });
+    }
+
+    /// The crisp click for a press that actually selected something (a menu
     /// item, an option value, a bid, a card). Not for moves or refused presses.
     pub fn tap(&mut self) {
-        self.rumble(0.15, 0.05);
+        // Almost all high motor and very short, so it clicks rather than hums.
+        self.buzz(0.0, 0.06, 0.65, 0.035);
+    }
+
+    /// A lighter tick for moving the focus (d-pad, stick, arrow keys) or
+    /// stepping a slider.
+    pub fn tick(&mut self) {
+        self.buzz(0.0, 0.0, 0.32, 0.022);
+    }
+
+    /// A card flicked across the felt during the deal. Cards to your own seat
+    /// land a little firmer.
+    pub fn deal_flick(&mut self, to_you: bool) {
+        if to_you {
+            self.buzz(0.0, 0.05, 0.3, 0.03);
+        } else {
+            self.buzz(0.0, 0.0, 0.17, 0.022);
+        }
+    }
+
+    /// A riffle shuffle: a fast flutter of clicks that speeds up and fades,
+    /// then a soft thump as the deck is squared.
+    pub fn riffle(&mut self) {
+        let mut t = 0.0;
+        for i in 0..9 {
+            let k = i as f32 / 8.0;
+            self.buzz(t, 0.0, 0.42 - 0.18 * k, 0.022);
+            t += 0.05 - 0.018 * k;
+        }
+        self.buzz(t + 0.06, 0.3, 0.12, 0.07);
+    }
+
+    /// Cards sliding together into the pile.
+    pub fn gather_slide(&mut self) {
+        self.buzz(0.0, 0.12, 0.1, 0.14);
     }
 
     /// A control hint for the current device: `pad` with a gamepad, `keys` otherwise.

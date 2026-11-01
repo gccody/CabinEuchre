@@ -14,7 +14,7 @@ use love2drs::prelude::*;
 use crate::cards::CardArt;
 use crate::palette;
 use crate::render::{Renderer, VIEW_H, VIEW_W};
-use crate::scene::{InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
+use crate::scene::{Buzz, InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel, table::Table, title::Title};
 use crate::settings::Settings;
 use crate::sfx::Sfx;
@@ -63,6 +63,11 @@ pub struct App {
     /// so a nudged mouse (or Steam turning the touchpad into a cursor) can't
     /// silence the controller.
     pad_active: bool,
+    /// Rumble pulses waiting for their start time, delays counting down.
+    pending_buzz: Vec<Buzz>,
+    /// What the motors are doing now: `(low, high, seconds left)`, so a quick
+    /// click during a long rumble adds to it instead of cutting it short.
+    buzzing: (f32, f32, f32),
 }
 
 /// Auto-repeat for a held direction.
@@ -118,7 +123,7 @@ impl App {
             mouse_down: false,
             input: InputMode::Mouse,
             gamepad: ctx.gamepad.is_connected(),
-            rumble: None,
+            rumbles: Vec::new(),
         };
         // Debug: `EUCHRE_INPUT=pad|touch` starts as if that device was used last
         // (screenshots of the focus highlight and the pad hints without a controller).
@@ -154,6 +159,8 @@ impl App {
             last_resize: None,
             repeat: Repeat::default(),
             pad_active: false,
+            pending_buzz: Vec::new(),
+            buzzing: (0.0, 0.0, 0.0),
             fixed_dt: std::env::var("EUCHRE_FIXED_DT")
                 .ok()
                 .and_then(|v| v.parse::<f32>().ok())
@@ -232,15 +239,39 @@ impl App {
         }
     }
 
-    /// Plays a rumble a scene asked for on every pad, if the player is on one.
-    fn play_rumble(&mut self, ctx: &mut Context) {
-        let Some((strength, seconds)) = self.shared.rumble.take() else { return };
+    /// Plays the rumble pulses scenes asked for on every pad, once each is
+    /// due, if the player is on one. Pulses that overlap play together at the
+    /// stronger of each motor.
+    fn play_rumble(&mut self, ctx: &mut Context, dt: f32) {
+        self.buzzing.2 -= dt;
+        if self.buzzing.2 <= 0.0 {
+            self.buzzing = (0.0, 0.0, 0.0);
+        }
+        let new = std::mem::take(&mut self.shared.rumbles);
         if !self.shared.settings.rumble || !self.pad_active {
+            self.pending_buzz.clear();
             return;
         }
+        self.pending_buzz.extend(new);
+        let mut due = None::<(f32, f32, f32)>;
+        self.pending_buzz.retain_mut(|b| {
+            b.delay -= dt;
+            if b.delay > 0.0 {
+                return true;
+            }
+            let (l, h, s) = due.unwrap_or((0.0, 0.0, 0.0));
+            due = Some((l.max(b.low), h.max(b.high), s.max(b.seconds)));
+            false
+        });
+        let Some((low, high, seconds)) = due else { return };
+        let (bl, bh, left) = self.buzzing;
+        // Starting a new vibration replaces the old one, so a click during a
+        // long rumble keeps the long one going for the rest of its time.
+        let play = (low.max(bl), high.max(bh), seconds.max(left));
+        self.buzzing = play;
         let ids: Vec<GamepadId> = ctx.gamepad.ids().collect();
         for id in ids {
-            ctx.gamepad.set_vibration(id, strength, strength * 0.6, seconds);
+            ctx.gamepad.set_vibration(id, play.0, play.1, play.2);
         }
     }
 
@@ -267,7 +298,7 @@ impl Game for App {
         (self.shared.mouse, self.shared.mouse_down) = self.pointer(ctx);
         let t = self.scene.update(&mut self.shared, ctx, dt);
         self.apply(ctx, t);
-        self.play_rumble(ctx);
+        self.play_rumble(ctx, real_dt);
     }
 
     fn draw(&mut self, ctx: &mut Context) {

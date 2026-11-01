@@ -277,9 +277,15 @@ impl Scene for Title {
         }
         let n = self.buttons.len() as i32;
         match nav {
-            Nav::Up | Nav::Down => self.focus = (self.focus as i32 + nav.dy()).rem_euclid(n) as usize,
+            Nav::Up | Nav::Down => {
+                self.focus = (self.focus as i32 + nav.dy()).rem_euclid(n) as usize;
+                shared.tick();
+            }
             // B jumps to QUIT rather than quitting outright.
-            Nav::Back => self.focus = self.buttons.len() - 1,
+            Nav::Back if self.focus != self.buttons.len() - 1 => {
+                self.focus = self.buttons.len() - 1;
+                shared.tick();
+            }
             Nav::Confirm | Nav::Menu => {
                 // Start always deals; A presses the focused plaque.
                 let i = if nav == Nav::Menu { 0 } else { self.focus };

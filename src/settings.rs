@@ -17,7 +17,8 @@ pub struct Settings {
     /// Points needed to win a game.
     pub target: u32,
     pub fullscreen: bool,
-    /// Controller rumble on big moments (euchres, marches, game over).
+    /// Controller rumble: clicks on selections and focus moves, the shuffle and
+    /// deal, and big moments (euchres, marches, game over).
     pub rumble: bool,
 }
 

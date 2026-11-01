@@ -131,12 +131,13 @@ impl RulesPanel {
         }
     }
 
-    fn turn(&mut self, shared: &Shared, dir: i32) {
+    fn turn(&mut self, shared: &mut Shared, dir: i32) {
         let p = (self.page as i32 + dir).clamp(0, PAGES.len() as i32 - 1) as usize;
         if p != self.page {
             self.page = p;
             self.page_pop.value = 0.96;
             shared.sfx.play(Sound::Flip);
+            shared.tick();
         }
     }
 

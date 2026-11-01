@@ -175,6 +175,7 @@ impl OptionsPanel {
         match nav {
             Nav::Up | Nav::Down => {
                 self.focus = (self.focus as i32 + nav.dy()).rem_euclid(stops as i32) as usize;
+                shared.tick();
                 // The BACK plaque ticks by itself when the focus lands on it.
                 if self.focus < self.rows.len() {
                     shared.sfx.play(Sound::Hover);
@@ -196,7 +197,11 @@ impl OptionsPanel {
                     Control::Slider(s) => {
                         if nav != Nav::Confirm {
                             s.value = slider_value(row.opt, &shared.settings).unwrap_or(s.value);
+                            let before = s.value;
                             s.nudge(dir, &shared.sfx);
+                            if s.value != before {
+                                shared.tick();
+                            }
                             set_slider_value(row.opt, &mut shared.settings, s.value);
                         }
                     }

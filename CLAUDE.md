@@ -95,8 +95,12 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   The app ignores mouse events for a moment after any touch: the OS emulates them.
 - Rumble: `shared.rumble(strength, seconds)`. It plays only on a gamepad with the Rumble option
   on, after the player last pressed a controller button (mouse motion alone does not stop it).
-  Save it for the same big moments as screen shake. A press that actually selects something
-  (menu item, option value, bid, card) calls `shared.tap()`; moves and refused presses do not.
+  Save it for the same big moments as screen shake. Smaller pulses go through `shared.buzz(delay,
+  low, high, seconds)` (low = heavy motor, high = light motor; the app schedules delayed pulses
+  and merges overlaps): a press that actually selects something (menu item, option value, bid,
+  card) calls `shared.tap()` (a crisp high-motor click), a focus move or slider step that
+  actually moves calls `shared.tick()`, and the deal uses `riffle()`, `gather_slide()` and
+  `deal_flick()`. Refused presses don't rumble.
 
 ### Rules of the road
 
