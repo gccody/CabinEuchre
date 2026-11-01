@@ -208,4 +208,8 @@ pub trait Scene {
     fn nav(&mut self, shared: &mut Shared, nav: Nav) -> Transition {
         Transition::None
     }
+
+    /// The app is about to close (the window was closed): keep anything worth
+    /// keeping, like a game in progress.
+    fn suspend(&mut self, shared: &mut Shared) {}
 }

@@ -57,8 +57,8 @@ impl Table {
             g.translate(c.x, c.y);
             g.scale(p.pop.value, p.pop.value);
             g.translate(-c.x, -c.y);
-            ui::panel(g, Rect::centered(c.x, c.y, 160.0, 150.0), palette::PANEL);
-            Text::new("PAUSED", c.x, 116.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, &shared.font);
+            ui::panel(g, Rect::centered(c.x, c.y, 160.0, 166.0), palette::PANEL);
+            Text::new("PAUSED", c.x, 122.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, &shared.font);
             for (_, b) in &p.buttons {
                 b.draw(g, &shared.font);
             }

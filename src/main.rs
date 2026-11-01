@@ -22,6 +22,7 @@ mod euchre;
 mod juice;
 mod palette;
 mod render;
+mod savegame;
 mod scene;
 mod scenes;
 mod settings;

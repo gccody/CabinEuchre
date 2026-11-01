@@ -11,6 +11,11 @@ impl Rng {
         Rng { state: seed }
     }
 
+    /// The whole generator state; `Rng::new(state)` rebuilds it exactly.
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.state;

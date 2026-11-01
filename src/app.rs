@@ -139,9 +139,13 @@ impl App {
         shared.sfx.start_music();
         // Held arrow keys repeat focus moves (every other key ignores repeats).
         ctx.keyboard.set_key_repeat(true);
-        // Debug: `EUCHRE_SCENE=table|options|rules` jumps straight to a screen (for screenshots).
+        // Debug: `EUCHRE_SCENE=table|continue|options|rules` jumps straight to a screen (for screenshots).
         let scene: Box<dyn Scene> = match std::env::var("EUCHRE_SCENE").as_deref() {
             Ok("table") => Box::new(Table::new(&shared)),
+            Ok("continue") => match crate::savegame::load() {
+                Some(game) => Box::new(Table::resume(&shared, game)),
+                None => Box::new(Title::new()),
+            },
             Ok("options") => Box::new(Title::with_overlay(Overlay::Options(Box::new(OptionsPanel::new())))),
             Ok("rules") => Box::new(Title::with_overlay(Overlay::Rules(Box::new(RulesPanel::new())))),
             _ => Box::new(Title::new()),
@@ -176,6 +180,7 @@ impl App {
                 self.fade = 1.0;
             }
             Transition::Quit => {
+                self.scene.suspend(&mut self.shared);
                 self.shared.settings.save();
                 ctx.quit();
             }
@@ -452,6 +457,7 @@ impl Game for App {
     }
 
     fn quit(&mut self, _ctx: &mut Context) -> bool {
+        self.scene.suspend(&mut self.shared);
         self.shared.settings.save();
         false
     }

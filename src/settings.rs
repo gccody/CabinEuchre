@@ -22,6 +22,14 @@ pub struct Settings {
     pub rumble: bool,
 }
 
+/// Where the game keeps its files: `%APPDATA%\Euchre` on Windows,
+/// `~/.config/euchre` elsewhere.
+pub fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(|p| PathBuf::from(p).join("Euchre"))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("euchre")))
+}
+
 pub const SPEED_NAMES: [&str; 3] = ["Relaxed", "Normal", "Fast"];
 pub const TARGETS: [u32; 3] = [5, 7, 10];
 
@@ -47,15 +55,13 @@ impl Settings {
     }
 
     fn path() -> Option<PathBuf> {
-        let base = std::env::var_os("APPDATA")
-            .map(|p| PathBuf::from(p).join("Euchre"))
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("euchre")))?;
-        Some(base.join("settings.txt"))
+        Some(config_dir()?.join("settings.txt"))
     }
 
     /// Debug: `EUCHRE_DEFAULT_SETTINGS=1` ignores (and never writes) the saved
-    /// file, so screenshots don't depend on the player's options.
-    fn use_defaults() -> bool {
+    /// files (settings and the saved game), so screenshots don't depend on the
+    /// player's options or a game they left.
+    pub fn use_defaults() -> bool {
         std::env::var("EUCHRE_DEFAULT_SETTINGS").is_ok_and(|v| v == "1")
     }
 

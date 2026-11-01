@@ -7,7 +7,8 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
-game-over screens, pause menu, options (persisted) and an illustrated How to Play. Plays with
+game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted) and
+an illustrated How to Play. Plays with
 mouse, keyboard, touchscreen or gamepad.
 
 Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API questions. Its
@@ -35,12 +36,12 @@ the monitor's refresh rate.
 | variable | effect |
 |---|---|
 | `EUCHRE_FIXED_DT=n` | every frame advances exactly n/60 s (1 for screenshots, 4 to fast-forward soak runs) |
-| `EUCHRE_SCENE=table\|options\|rules` | start in a game, or on the title with a panel open |
+| `EUCHRE_SCENE=table\|continue\|options\|rules` | start in a game, resume the saved game, or on the title with a panel open |
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
 | `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
 | `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
-| `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the saved settings file, so screenshots don't depend on the player's options |
+| `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file and the saved game, so screenshots don't depend on the player's options or a game they left |
 
 Example: `EUCHRE_FIXED_DT=1 EUCHRE_SCENE=table EUCHRE_SEED=15 EUCHRE_AUTOPLAY=1 LOVE2DRS_SCREENSHOT=target/shots/bid.png LOVE2DRS_SCREENSHOT_FRAME=340 cargo run`
 shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you discard as dealer,
@@ -53,7 +54,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/main.rs` | window config, `love2drs::run` |
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
-| `src/euchre/` | **pure rules, no love2drs imports**: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points), `ai` (heuristics), `rng` |
+| `src/euchre/` | **pure rules, no love2drs imports**: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng` |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
@@ -67,12 +68,14 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/juice.rs` | `Spring`, easing curves, `wobble` |
 | `src/sfx.rs` | procedural sound effects (`Sound` enum), pitch jitter, synthesized lounge music loop |
 | `src/settings.rs` | options persisted to `%APPDATA%\Euchre\settings.txt` (or `~/.config/euchre/`) |
+| `src/savegame.rs` | the save slot, `savegame.txt` in the same folder: read, write (atomically), forget a finished game |
 | `src/assets.rs` | asset path lookup (cwd, crate root, exe dir) |
 
 ### How the table works
 
 - `Match`/`Round` in `src/euchre` are the source of truth. The scene only calls
-  `Round::apply(seat, action)` and `Round::advance()`.
+  `Match::apply(seat, action)` and `Match::advance()` (not the `Round` methods: the `Match`
+  versions log each step so the hand can be saved).
 - Every card has a `Place` (pile, up card, hand, trick, won pile, kitty, sitting out). `layout.rs`
   turns places into target positions each frame and per-card springs chase them, so cards never
   snap. Change a card's place with `Table::move_card`, which also bumps its draw order.
@@ -80,6 +83,13 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   queue is empty, `drive()` looks at the round's phase and schedules the next step, or sets up
   the human's prompt and waits for input.
 - `perform()` applies an action and mirrors it visually (bubbles, trump toast, card moves).
+- Saving: a save is the RNG state at the start of the current hand plus every step since.
+  Loading re-deals and replays through the rules, so a bad file is rejected, never half-loaded.
+  "SAVE & QUIT" (pause menu) and closing the window mid-game write it (`Scene::suspend`); game
+  over deletes it, but only if it holds that game (`savegame::forget(id)`). `Table::resume`
+  works out every card's place from the round (`settled_places`) and deals them back out. To
+  screenshot a resume, point `APPDATA` at a scratch folder holding `Euchre\savegame.txt` and use
+  `EUCHRE_SCENE=continue` (screenshot mode exits without `Game::quit`, so it never saves).
 
 ### Input
 

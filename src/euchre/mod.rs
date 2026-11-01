@@ -6,12 +6,14 @@
 //! - `game`  a match played to a target score
 //! - `ai`    heuristic players for the computer seats
 //! - `rng`   a small seeded RNG
+//! - `save`  a match in progress as a text snapshot (replayed on load)
 
 pub mod ai;
 pub mod card;
 pub mod game;
 pub mod rng;
 pub mod round;
+pub mod save;
 
 pub use card::{Card, Rank, Suit};
 pub use game::Match;

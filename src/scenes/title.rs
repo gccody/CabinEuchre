@@ -1,16 +1,20 @@
 //! Title screen: the logo, a fan of the four jacks (click them to flip them
 //! over), and the main menu. A gamepad or the arrow keys move a focus
 //! highlight up and down the menu.
+//!
+//! When a game was saved, the menu leads with CONTINUE (and the saved score)
+//! above NEW GAME.
 
 use std::f32::consts::PI;
 
 use love2drs::prelude::*;
 
 use crate::cards::Pose;
-use crate::euchre::{Card, Rank, Suit};
+use crate::euchre::{Card, Match, Rank, Suit};
 use crate::juice::{self, Spring};
 use crate::palette;
 use crate::render::{VIEW_H, VIEW_W};
+use crate::savegame;
 use crate::scene::{InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::table::Table;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
@@ -35,6 +39,7 @@ struct FanCard {
 
 #[derive(Clone, Copy)]
 enum Choice {
+    Continue,
     Play,
     Options,
     Rules,
@@ -49,6 +54,23 @@ pub struct Title {
     age: f32,
     /// Index into `buttons` for the gamepad / keyboard focus.
     focus: usize,
+    /// The game in the save slot, offered as CONTINUE.
+    saved: Option<Match>,
+    /// How far the jacks, logo and tagline sit above their usual place
+    /// ([`SAVED_LIFT`] when the menu has the extra CONTINUE row, else 0).
+    lift: f32,
+}
+
+/// The header moves up this much to make room for CONTINUE and its score line.
+const SAVED_LIFT: f32 = 14.0;
+/// Space between the score line and the plaques above and below it.
+const SUMMARY_GAP: f32 = 6.0;
+/// How far a plaque's lip and drop shadow reach below its rect.
+const PLAQUE_BELOW: f32 = 4.0;
+
+/// The line under CONTINUE: the saved game's score.
+fn saved_summary(m: &Match) -> String {
+    format!("WE {} · THEY {} · PLAYING TO {}", m.scores[0], m.scores[1], m.target)
 }
 
 fn card_spring(v: f32) -> Spring {
@@ -60,13 +82,15 @@ fn card_spring(v: f32) -> Spring {
 
 impl Title {
     pub fn new() -> Self {
+        let saved = savegame::load();
+        let lift = if saved.is_some() { SAVED_LIFT } else { 0.0 };
         let jacks = [Suit::Clubs, Suit::Diamonds, Suit::Spades, Suit::Hearts];
         let cards = jacks
             .iter()
             .enumerate()
             .map(|(i, &suit)| {
                 let k = i as f32 - 1.5;
-                let home = vec2(CX + k * 40.0, 80.0 + k * k * 4.0);
+                let home = vec2(CX + k * 40.0, 80.0 + k * k * 4.0 - lift);
                 let angle = k * 0.14;
                 // Cards start below the screen and fly up, staggered.
                 let mut y = card_spring(VIEW_H as f32 + 60.0 + i as f32 * 40.0);
@@ -89,12 +113,24 @@ impl Title {
         let letters = (0..TITLE.len()).map(|_| Spring::new(0.0)).collect();
         // A single column of plaques under the logo.
         let w = 112.0;
-        let buttons = vec![
-            (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 226.0, w + 24.0, 26.0)).scaled(1.5)),
-            (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 259.0, w, 18.0))),
-            (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 283.0, w, 18.0))),
-            (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 307.0, w, 18.0))),
-        ];
+        let buttons = if saved.is_some() {
+            // CONTINUE, its score line (SUMMARY_GAP below the plaque's lip and
+            // shadow, and the same gap above NEW GAME), then the usual 24 px pitch.
+            vec![
+                (Choice::Continue, Button::brass("CONTINUE", Rect::centered(CX, 206.0, w + 24.0, 26.0)).scaled(1.5)),
+                (Choice::Play, Button::red("NEW GAME", Rect::centered(CX, 256.0, w, 18.0))),
+                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 280.0, w, 18.0))),
+                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 304.0, w, 18.0))),
+                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 328.0, w, 18.0))),
+            ]
+        } else {
+            vec![
+                (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 226.0, w + 24.0, 26.0)).scaled(1.5)),
+                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 259.0, w, 18.0))),
+                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 283.0, w, 18.0))),
+                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 307.0, w, 18.0))),
+            ]
+        };
         Title {
             cards,
             letters,
@@ -102,6 +138,8 @@ impl Title {
             overlay: None,
             age: 0.0,
             focus: 0,
+            saved,
+            lift,
         }
     }
 
@@ -115,6 +153,15 @@ impl Title {
     fn choose(&mut self, shared: &mut Shared, choice: Choice) -> Transition {
         shared.tap();
         match choice {
+            Choice::Continue => {
+                let table = match self.saved.take() {
+                    Some(game) => Table::resume(shared, game),
+                    None => Table::new(shared),
+                };
+                return Transition::Switch(Box::new(table));
+            }
+            // A new game leaves the save alone until it's saved over (or this
+            // game finishes), so a stray click can't lose it.
             Choice::Play => return Transition::Switch(Box::new(Table::new(shared))),
             Choice::Options => {
                 shared.sfx.play(Sound::Pop);
@@ -198,7 +245,7 @@ impl Scene for Title {
         let widths: Vec<f32> = TITLE.chars().map(|ch| font.width(&ch.to_string()) + 2.0).collect();
         let total = (widths.iter().sum::<f32>() - 2.0) * scale;
         let mut x = CX - total / 2.0;
-        let cy = 150.0;
+        let cy = 150.0 - self.lift;
         for (i, ch) in TITLE.chars().enumerate() {
             let s = ch.to_string();
             let w = widths[i] * scale;
@@ -226,13 +273,20 @@ impl Scene for Title {
             }
             x += w;
         }
-        Text::new("♣  A TRICK-TAKING CARD GAME  ♥", CX, 186.0)
+        Text::new("♣  A TRICK-TAKING CARD GAME  ♥", CX, 186.0 - self.lift)
             .color(palette::BRASS_LIGHT)
             .center()
             .draw(g, font);
 
         for (_, b) in &self.buttons {
             b.draw(g, font);
+        }
+        if let (Some(m), Some((_, b))) = (&self.saved, self.buttons.first()) {
+            // Top-anchored, so the gap is measured from the plaque's real bottom edge.
+            Text::new(&saved_summary(m), CX, b.rect.y + b.rect.h + PLAQUE_BELOW + SUMMARY_GAP)
+                .color(palette::MUTED)
+                .anchor(0.5, 0.0)
+                .draw(g, font);
         }
 
         let pad = if self.overlay.is_some() {
@@ -287,7 +341,7 @@ impl Scene for Title {
                 shared.tick();
             }
             Nav::Confirm | Nav::Menu => {
-                // Start always deals; A presses the focused plaque.
+                // Start presses the top plaque (continue, or deal); A presses the focused one.
                 let i = if nav == Nav::Menu { 0 } else { self.focus };
                 self.buttons[i].1.flash(&shared.sfx);
                 let choice = self.buttons[i].0;

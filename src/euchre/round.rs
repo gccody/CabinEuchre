@@ -106,6 +106,8 @@ pub struct Round {
     /// The trick in progress, in play order.
     pub trick: Vec<(Seat, Card)>,
     pub tricks_won: [u8; SEATS],
+    /// Who won each completed trick, in order.
+    pub trick_winners: Vec<Seat>,
     /// Every card played so far this hand, in order.
     pub played: Vec<Card>,
     pub discard: Option<Card>,
@@ -147,6 +149,7 @@ impl Round {
             turn: next_seat(dealer),
             trick: Vec::new(),
             tricks_won: [0; SEATS],
+            trick_winners: Vec::new(),
             played: Vec::new(),
             discard: None,
             stick_the_dealer,
@@ -283,6 +286,7 @@ impl Round {
                 if self.trick.len() == self.active_players() {
                     let (winner, _) = self.trick_leader().expect("trick has cards");
                     self.tricks_won[winner] += 1;
+                    self.trick_winners.push(winner);
                     self.turn = winner;
                     self.phase = Phase::TrickDone;
                 } else {

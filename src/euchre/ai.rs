@@ -285,7 +285,7 @@ mod tests {
                 assert!(guard < 10_000, "game {seed} did not finish");
                 let r = &m.round;
                 match r.phase {
-                    Phase::TrickDone => m.round.advance(),
+                    Phase::TrickDone => m.advance(),
                     Phase::Misdeal => {
                         misdeals += 1;
                         m.next_hand();
@@ -315,7 +315,7 @@ mod tests {
                     _ => {
                         let seat = r.to_act().unwrap();
                         let action = choose(r, seat);
-                        m.round.apply(seat, action).unwrap_or_else(|e| {
+                        m.apply(seat, action).unwrap_or_else(|e| {
                             panic!("seed {seed}: {action:?} by {seat} rejected: {e:?}")
                         });
                     }

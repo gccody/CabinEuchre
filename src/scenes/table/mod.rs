@@ -12,6 +12,10 @@
 //! walks the focus along your hand or the bid buttons, A plays or bids,
 //! Y toggles alone, Start pauses.
 //!
+//! Saving: "SAVE & QUIT" in the pause menu (and closing the window mid-game)
+//! writes the match to the save slot (`crate::savegame`); [`Table::resume`]
+//! lays a saved hand back out on the felt. A finished game deletes its save.
+//!
 //! - `layout.rs` where each place is on screen
 //! - `draw.rs`   all rendering (cards, sidebar, prompts, panels)
 
@@ -27,6 +31,7 @@ use crate::euchre::{
 };
 use crate::juice::Spring;
 use crate::palette;
+use crate::savegame;
 use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::title::Title;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
@@ -111,6 +116,8 @@ enum Cue {
     ShowResult,
     Redeal,
     Say(Seat, String),
+    /// Moves cards straight to their places with one sound (laying out a resumed hand).
+    Lay(Vec<(Card, Place)>, Sound),
 }
 
 /// What the human is being asked to do.
@@ -228,6 +235,7 @@ pub struct Table {
 }
 
 impl Table {
+    /// A new game with the current options.
     pub fn new(shared: &Shared) -> Self {
         let seed = std::env::var("EUCHRE_SEED")
             .ok()
@@ -249,10 +257,30 @@ impl Table {
             .and_then(|t| t.parse().ok())
             .unwrap_or(s.target);
         let game = Match::new(target, s.stick_the_dealer, seed);
+        let mut table = Table::with_match(shared, game);
+        table.begin_hand();
+        table
+    }
+
+    /// Picks a saved game back up where it was left.
+    pub fn resume(shared: &Shared, game: Match) -> Self {
+        let mut table = Table::with_match(shared, game);
+        if table.game.hand_untouched() {
+            // Nothing happened yet this hand: just deal it again.
+            table.begin_hand();
+        } else {
+            table.begin_resume();
+        }
+        table
+    }
+
+    fn with_match(shared: &Shared, game: Match) -> Self {
+        // Before the deal, the cards are still out of sight above the table.
         let sprites = (0..24)
             .map(|i| Sprite::new(layout::CENTER.x + (i as f32 - 12.0) * 2.0, -80.0 - i as f32 * 6.0))
             .collect();
-        let mut table = Table {
+        let score_shown = game.scores;
+        Table {
             game,
             sprites,
             places: [Place::Pile; 24],
@@ -276,16 +304,14 @@ impl Table {
             shake: 0.0,
             particles: Vec::new(),
             winner_glow: None,
-            score_shown: [0, 0],
+            score_shown,
             score_tick: 0.0,
             score_pop: [Spring::new(1.0), Spring::new(1.0)],
             trick_pop: [Spring::new(1.0), Spring::new(1.0)],
             trump_pop: Spring::new(1.0),
             autoplay: std::env::var("EUCHRE_AUTOPLAY").is_ok_and(|v| v == "1"),
-            delay: s.delay_factor(),
-        };
-        table.begin_hand();
-        table
+            delay: shared.settings.delay_factor(),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -328,6 +354,95 @@ impl Table {
         self.cue(Cue::Wait(0.3));
         self.cue(Cue::RevealUp);
         self.cue(Cue::Wait(0.45));
+    }
+
+    /// Where every card belongs in the round's current state.
+    fn settled_places(&self) -> [Place; 24] {
+        let r = &self.game.round;
+        let mut places = [Place::Pile; 24];
+        // Once trump is set the kitty (with any discard) sits beside the dealer.
+        if matches!(r.phase, Phase::Play | Phase::TrickDone | Phase::HandOver) {
+            for c in &r.kitty {
+                places[c.id()] = Place::Kitty(r.dealer);
+            }
+        }
+        if r.phase == Phase::OrderUp {
+            places[r.up_card.id()] = Place::UpCard;
+        }
+        for (seat, hand) in r.hands.iter().enumerate() {
+            let place = if r.is_sitting_out(seat) { Place::SitOut(seat) } else { Place::Hand(seat) };
+            for c in hand {
+                places[c.id()] = place;
+            }
+        }
+        // Collected tricks go to their winners' piles. A finished trick that
+        // hasn't been collected yet is still on the felt.
+        let per_trick = r.active_players();
+        let collected = r.trick_winners.len() - usize::from(r.phase == Phase::TrickDone);
+        let mut won = [0u8; 4];
+        for (i, &winner) in r.trick_winners[..collected].iter().enumerate() {
+            for c in &r.played[i * per_trick..(i + 1) * per_trick] {
+                places[c.id()] = Place::Won(winner, won[winner]);
+            }
+            won[winner] += 1;
+        }
+        for &(seat, c) in &r.trick {
+            places[c.id()] = Place::Trick(seat);
+        }
+        places
+    }
+
+    /// Queues the cards of a resumed hand flying back to where they were:
+    /// won tricks and the kitty, then the hands dealt out, then the trick in
+    /// play order, then the up card.
+    fn begin_resume(&mut self) {
+        self.cue(Cue::Gather);
+        self.cue(Cue::Wait(0.55));
+        let places = self.settled_places();
+        let set_aside: Vec<(Card, Place)> = (0..24)
+            .map(|id| (Card::from_id(id), places[id]))
+            .filter(|(_, p)| matches!(p, Place::Won(..) | Place::Kitty(_) | Place::SitOut(_)))
+            .collect();
+        if !set_aside.is_empty() {
+            self.cue(Cue::Lay(set_aside, Sound::CardSlide));
+            self.cue(Cue::Wait(0.35));
+        }
+        let r = &self.game.round;
+        let mut deals = Vec::new();
+        for i in 0..6 {
+            for k in 1..=4 {
+                let seat = (r.dealer + k) % 4;
+                if !r.is_sitting_out(seat)
+                    && let Some(&card) = r.hands[seat].get(i)
+                {
+                    deals.push((card, seat));
+                }
+            }
+        }
+        let trick = r.trick.clone();
+        let up_card = (r.phase == Phase::OrderUp).then_some(r.up_card);
+        for (card, seat) in deals {
+            self.cue(Cue::Deal(card, seat));
+            self.cue(Cue::Wait(0.065));
+        }
+        self.cue(Cue::Wait(0.25));
+        for (seat, card) in trick {
+            self.cue(Cue::Lay(vec![(card, Place::Trick(seat))], Sound::CardPlace));
+            self.cue(Cue::Wait(0.18));
+        }
+        if up_card.is_some() {
+            self.cue(Cue::RevealUp);
+            self.cue(Cue::Wait(0.3));
+        }
+        self.cue(Cue::Say(partner_of(HUMAN), "Welcome back!".into()));
+        self.cue(Cue::Wait(0.6));
+    }
+
+    /// Writes the game to the save slot, unless it's already over.
+    fn save(&self) {
+        if self.game_over.is_none() {
+            savegame::write(&self.game);
+        }
     }
 
     fn run(&mut self, cue: Cue, shared: &mut Shared) {
@@ -420,7 +535,7 @@ impl Table {
                 }
                 self.trick_pop[team_of(winner)].impulse(4.0);
                 self.winner_glow = None;
-                self.game.round.advance();
+                self.game.advance();
                 sfx.play(Sound::CardSlide);
             }
             Cue::ShowResult => self.show_result(shared),
@@ -429,6 +544,12 @@ impl Table {
                 self.begin_hand();
             }
             Cue::Say(seat, text) => self.say(seat, text),
+            Cue::Lay(cards, sound) => {
+                for (card, place) in cards {
+                    self.move_card(card, place);
+                }
+                sfx.play(sound);
+            }
         }
     }
 
@@ -485,7 +606,7 @@ impl Table {
     fn perform(&mut self, seat: Seat, action: Action, shared: &mut Shared) -> bool {
         let before = self.game.round.phase;
         let dealer = self.game.round.dealer;
-        if let Err(e) = self.game.round.apply(seat, action) {
+        if let Err(e) = self.game.apply(seat, action) {
             if seat == HUMAN {
                 shared.sfx.play(Sound::Deny);
                 self.hint = Some((explain(e, &self.game.round), 2.2));
@@ -654,6 +775,8 @@ impl Table {
         self.score_shown = self.game.scores;
         if let Some(winner) = self.game.winner() {
             let won = winner == 0;
+            // This game is finished, so it can't be continued any more.
+            savegame::forget(self.game.id);
             if self.autoplay {
                 eprintln!(
                     "[euchre] autoplay: game over after {} hands, {}-{}",
@@ -846,12 +969,14 @@ impl Table {
         let mut pop = Spring::new(0.85);
         pop.target = 1.0;
         let w = 120.0;
+        // Once the game is over there is nothing left to save.
+        let quit_label = if self.game_over.is_some() { "MAIN MENU" } else { "SAVE & QUIT" };
         self.pause = Some(Pause {
             buttons: vec![
-                (PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 140.0, w, 20.0))),
-                (PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 166.0, w, 20.0))),
-                (PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 192.0, w, 20.0))),
-                (PauseChoice::Quit, Button::red("MAIN MENU", Rect::centered(cx, 218.0, w, 20.0))),
+                (PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 154.0, w, 20.0))),
+                (PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 180.0, w, 20.0))),
+                (PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 206.0, w, 20.0))),
+                (PauseChoice::Quit, Button::red(quit_label, Rect::centered(cx, 232.0, w, 20.0))),
             ],
             pop,
             focus: 0,
@@ -865,6 +990,7 @@ impl Table {
             PauseChoice::Options => self.overlay = Some(Overlay::Options(Box::new(OptionsPanel::new()))),
             PauseChoice::Rules => self.overlay = Some(Overlay::Rules(Box::new(RulesPanel::new()))),
             PauseChoice::Quit => {
+                self.save();
                 shared.settings.save();
                 return Transition::Switch(Box::new(Title::new()));
             }
@@ -1090,6 +1216,10 @@ impl Scene for Table {
 
     fn draw(&mut self, shared: &Shared, g: &mut Graphics) {
         self.draw_table(shared, g);
+    }
+
+    fn suspend(&mut self, _shared: &mut Shared) {
+        self.save();
     }
 
     fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> Transition {
