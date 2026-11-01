@@ -1,0 +1,25 @@
+[package]
+name = "euchre"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Euchre with a juicy, CRT-glow card-game presentation."
+publish = false
+
+[dependencies]
+love2drs = { git = "https://github.com/gccody/Love2DRS" }
+
+# To develop against a local checkout of the framework instead, uncomment:
+# [patch."https://github.com/gccody/Love2DRS"]
+# love2drs = { path = "C:/Users/gccody/.t3/projects/love2drs" }
+
+# Optimize dependencies (wgpu, image decoding, audio) even in debug builds so
+# `cargo run` stays smooth. Our own crate still compiles fast.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
