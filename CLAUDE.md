@@ -7,7 +7,8 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
-game-over screens, pause menu, options (persisted) and an illustrated How to Play.
+game-over screens, pause menu, options (persisted) and an illustrated How to Play. Plays with
+mouse, keyboard, touchscreen or gamepad.
 
 Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API questions. Its
 `references/api.md` is the API reference. Don't guess method names.
@@ -38,6 +39,7 @@ the monitor's refresh rate.
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
 | `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
+| `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the saved settings file, so screenshots don't depend on the player's options |
 
 Example: `EUCHRE_FIXED_DT=1 EUCHRE_SCENE=table EUCHRE_SEED=15 EUCHRE_AUTOPLAY=1 LOVE2DRS_SCREENSHOT=target/shots/bid.png LOVE2DRS_SCREENSHOT_FRAME=340 cargo run`
@@ -49,8 +51,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | file | role |
 |---|---|
 | `src/main.rs` | window config, `love2drs::run` |
-| `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade |
-| `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space mouse), `Transition` |
+| `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
+| `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
 | `src/euchre/` | **pure rules, no love2drs imports**: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points), `ai` (heuristics), `rng` |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
@@ -79,6 +81,23 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   the human's prompt and waits for input.
 - `perform()` applies an action and mirrors it visually (bubbles, trump toast, card moves).
 
+### Input
+
+- `Shared::input` is the device used last: `Mouse`, `Touch` or `Buttons` (gamepad or arrow
+  keys). `shared.mouse` is the mouse, the finger while one is down, or `scene::NO_POINTER`, so
+  hover effects just work and vanish on a gamepad.
+- Gamepad and arrow keys arrive as `Scene::nav(Nav)`: d-pad/left stick (auto-repeat), A
+  `Confirm`, B `Back`, Start/Back `Menu`, Y `Alt` (alone), LB/RB pages. Once the focus is
+  showing, Enter and Space are `Confirm` too. Each scene keeps a focus index and sets
+  `Button::focused` / `Slider::focused`; focus only draws when `shared.focus_visible()`.
+- Touch acts on release (`Scene::touch_released`, defaulting to `mouse_pressed`), so you can
+  slide along your hand before lifting to play. Sliders start dragging in `touch_pressed`.
+  The app ignores mouse events for a moment after any touch: the OS emulates them.
+- Rumble: `shared.rumble(strength, seconds)`. It plays only on a gamepad with the Rumble option
+  on, after the player last pressed a controller button (mouse motion alone does not stop it).
+  Save it for the same big moments as screen shake. A press that actually selects something
+  (menu item, option value, bid, card) calls `shared.tap()`; moves and refused presses do not.
+
 ### Rules of the road
 
 - **Design space.** Scenes draw in a fixed 640x360 coordinate space and receive mouse positions
@@ -90,6 +109,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - **Motion** should never snap. Drive positions, scale and rotation with `juice::Spring` or the
   easing functions. Kick a spring (`impulse`) for feedback on every interaction. Keep it
   tasteful: small overshoot, short shakes only for euchres, marches and game over.
+- **Every control is reachable without a mouse.** New buttons need a place in their scene's
+  focus order and a `nav` path to them.
 - **Sound**: every interaction makes a sound. Add variants to `sfx::Sound` and play them via
   `shared.sfx.play(...)`, which already adds pitch jitter. Use `play_pitched` for rising pitch
   on streaks (each trick won).

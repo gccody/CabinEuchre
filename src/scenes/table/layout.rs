@@ -13,6 +13,7 @@ use love2drs::prelude::*;
 use super::{HUMAN, Place, Prompt, Table};
 use crate::cards::{CARD_H, CARD_W};
 use crate::euchre::{Card, Seat, Suit};
+use crate::scene::NO_POINTER;
 
 /// Center of the playing area (the pile and the trick).
 pub const CENTER: Vec2 = Vec2::new(320.0, 152.0);
@@ -164,7 +165,9 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
                 if t.hover == Some(card) {
                     lift += 8.0;
                     scale *= 1.05;
-                    rot += ((mouse.x - pos.x) / 22.0).clamp(-1.0, 1.0) * 0.05;
+                    if mouse != NO_POINTER {
+                        rot += ((mouse.x - pos.x) / 22.0).clamp(-1.0, 1.0) * 0.05;
+                    }
                 }
                 pos.y -= lift;
             }

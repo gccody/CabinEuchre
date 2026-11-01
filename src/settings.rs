@@ -17,6 +17,8 @@ pub struct Settings {
     /// Points needed to win a game.
     pub target: u32,
     pub fullscreen: bool,
+    /// Controller rumble on big moments (euchres, marches, game over).
+    pub rumble: bool,
 }
 
 pub const SPEED_NAMES: [&str; 3] = ["Relaxed", "Normal", "Fast"];
@@ -32,6 +34,7 @@ impl Default for Settings {
             stick_the_dealer: true,
             target: 10,
             fullscreen: false,
+            rumble: true,
         }
     }
 }
@@ -77,6 +80,7 @@ impl Settings {
                 "stick_the_dealer" => s.stick_the_dealer = b,
                 "target" => s.target = v.parse().ok().filter(|t| TARGETS.contains(t)).unwrap_or(s.target),
                 "fullscreen" => s.fullscreen = b,
+                "rumble" => s.rumble = b,
                 _ => {}
             }
         }
@@ -92,8 +96,15 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\n",
-            self.volume, self.music, self.atmosphere, self.speed, self.stick_the_dealer, self.target, self.fullscreen
+            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\n",
+            self.volume,
+            self.music,
+            self.atmosphere,
+            self.speed,
+            self.stick_the_dealer,
+            self.target,
+            self.fullscreen,
+            self.rumble
         );
         if let Err(e) = std::fs::write(&path, text) {
             crate::assets::log_warn(&format!("could not save settings: {e}"));

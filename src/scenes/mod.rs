@@ -7,7 +7,7 @@ pub mod title;
 
 use love2drs::prelude::*;
 
-use crate::scene::Shared;
+use crate::scene::{Nav, Shared};
 use options::OptionsPanel;
 use rules::RulesPanel;
 
@@ -37,6 +37,29 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.mouse_pressed(shared, pos),
             Overlay::Rules(p) => p.mouse_pressed(shared, pos),
+        }
+    }
+
+    /// A finger touched down (sliders start dragging here).
+    pub fn touch_pressed(&mut self, shared: &mut Shared, pos: Vec2) {
+        if let Overlay::Options(p) = self {
+            p.touch_pressed(shared, pos);
+        }
+    }
+
+    /// A tap (finger lifted). Returns true when the overlay should close.
+    pub fn touch_released(&mut self, shared: &mut Shared, pos: Vec2) -> bool {
+        match self {
+            Overlay::Options(p) => p.touch_released(shared, pos),
+            Overlay::Rules(p) => p.mouse_pressed(shared, pos),
+        }
+    }
+
+    /// Returns true when the overlay should close.
+    pub fn nav(&mut self, shared: &mut Shared, nav: Nav) -> bool {
+        match self {
+            Overlay::Options(p) => p.nav(shared, nav),
+            Overlay::Rules(p) => p.nav(shared, nav),
         }
     }
 

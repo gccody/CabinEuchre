@@ -1,5 +1,6 @@
 //! Title screen: the logo, a fan of the four jacks (click them to flip them
-//! over), and the main menu.
+//! over), and the main menu. A gamepad or the arrow keys move a focus
+//! highlight up and down the menu.
 
 use std::f32::consts::PI;
 
@@ -10,7 +11,7 @@ use crate::euchre::{Card, Rank, Suit};
 use crate::juice::{self, Spring};
 use crate::palette;
 use crate::render::{VIEW_H, VIEW_W};
-use crate::scene::{Scene, Shared, Transition};
+use crate::scene::{InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::table::Table;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
 use crate::sfx::Sound;
@@ -46,6 +47,8 @@ pub struct Title {
     buttons: Vec<(Choice, Button)>,
     overlay: Option<Overlay>,
     age: f32,
+    /// Index into `buttons` for the gamepad / keyboard focus.
+    focus: usize,
 }
 
 fn card_spring(v: f32) -> Spring {
@@ -98,6 +101,7 @@ impl Title {
             buttons,
             overlay: None,
             age: 0.0,
+            focus: 0,
         }
     }
 
@@ -109,6 +113,7 @@ impl Title {
     }
 
     fn choose(&mut self, shared: &mut Shared, choice: Choice) -> Transition {
+        shared.tap();
         match choice {
             Choice::Play => return Transition::Switch(Box::new(Table::new(shared))),
             Choice::Options => {
@@ -147,7 +152,7 @@ impl Scene for Title {
             }
             l.update(dt);
         }
-        let mouse = if self.overlay.is_some() { vec2(-99.0, -99.0) } else { shared.mouse };
+        let mouse = if self.overlay.is_some() { NO_POINTER } else { shared.mouse };
         let hovered = self.card_under(mouse);
         for (i, c) in self.cards.iter_mut().enumerate() {
             let target_hover = if hovered == Some(i) { 1.0 } else { 0.0 };
@@ -161,7 +166,9 @@ impl Scene for Title {
             let target_face = if c.face_up { 1.0 } else { 0.0 };
             c.face = approach(c.face, target_face, 12.0, dt);
         }
-        for (_, b) in &mut self.buttons {
+        let focus = (shared.focus_visible() && self.overlay.is_none()).then_some(self.focus);
+        for (i, (_, b)) in self.buttons.iter_mut().enumerate() {
+            b.focused = focus == Some(i);
             b.update(mouse, dt, &shared.sfx);
         }
         Transition::None
@@ -228,9 +235,16 @@ impl Scene for Title {
             b.draw(g, font);
         }
 
-        Text::new("F2: Lamplight   F11: Fullscreen   Esc: Quit", 6.0, VIEW_H as f32 - 12.0)
-            .color(palette::MUTED)
-            .draw(g, font);
+        let pad = if self.overlay.is_some() {
+            "D-pad: Choose   A: Select   B: Back"
+        } else {
+            "D-pad: Choose   A: Select   B: Quit button"
+        };
+        let footer = match shared.input {
+            InputMode::Touch => "",
+            _ => shared.hint(pad, "F2: Lamplight   F11: Fullscreen   Esc: Quit"),
+        };
+        Text::new(footer, 6.0, VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
 
         if let Some(o) = &self.overlay {
             o.draw(shared, g);
@@ -252,6 +266,47 @@ impl Scene for Title {
             }
             _ => Transition::None,
         }
+    }
+
+    fn nav(&mut self, shared: &mut Shared, nav: Nav) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            if o.nav(shared, nav) {
+                self.overlay = None;
+            }
+            return Transition::None;
+        }
+        let n = self.buttons.len() as i32;
+        match nav {
+            Nav::Up | Nav::Down => self.focus = (self.focus as i32 + nav.dy()).rem_euclid(n) as usize,
+            // B jumps to QUIT rather than quitting outright.
+            Nav::Back => self.focus = self.buttons.len() - 1,
+            Nav::Confirm | Nav::Menu => {
+                // Start always deals; A presses the focused plaque.
+                let i = if nav == Nav::Menu { 0 } else { self.focus };
+                self.buttons[i].1.flash(&shared.sfx);
+                let choice = self.buttons[i].0;
+                return self.choose(shared, choice);
+            }
+            _ => {}
+        }
+        Transition::None
+    }
+
+    fn touch_pressed(&mut self, shared: &mut Shared, pos: Vec2) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            o.touch_pressed(shared, pos);
+        }
+        Transition::None
+    }
+
+    fn touch_released(&mut self, shared: &mut Shared, pos: Vec2) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            if o.touch_released(shared, pos) {
+                self.overlay = None;
+            }
+            return Transition::None;
+        }
+        self.mouse_pressed(shared, pos, MouseButton::Left)
     }
 
     fn mouse_pressed(&mut self, shared: &mut Shared, pos: Vec2, button: MouseButton) -> Transition {

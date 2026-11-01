@@ -107,7 +107,13 @@ pub struct Button {
     pub suit_tint: bool,
     /// An image drawn instead of the label (tinted with `text_color`, scaled by `text_scale`).
     pub icon: Option<(Image, Quad)>,
+    /// Set by the scene when the gamepad / keyboard focus is on this button.
+    /// Draws a pulsing brass ring and lifts the button like a hover.
+    pub focused: bool,
     hovered: bool,
+    /// 0..1, fades the focus ring in and out.
+    focus: f32,
+    clock: f32,
     hover: f32,
     pressed: f32,
     pop: Spring,
@@ -125,7 +131,10 @@ impl Button {
             enabled: true,
             suit_tint: true,
             icon: None,
+            focused: false,
             hovered: false,
+            focus: 0.0,
+            clock: 0.0,
             hover: 0.0,
             pressed: 0.0,
             pop: Spring::new(1.0),
@@ -160,9 +169,9 @@ impl Button {
         self
     }
 
-    /// Call every frame. Plays a soft tick when the mouse first enters.
+    /// Call every frame. Plays a soft tick when the mouse (or the focus) first arrives.
     pub fn update(&mut self, mouse: Vec2, dt: f32, sfx: &Sfx) {
-        let over = self.rect.contains(mouse);
+        let over = self.rect.contains(mouse) || self.focused;
         if over && !self.hovered && self.enabled {
             sfx.play(Sound::Hover);
         }
@@ -170,7 +179,26 @@ impl Button {
         let target = if over && self.enabled { 1.0 } else { 0.0 };
         self.hover = approach(self.hover, target, 18.0, dt);
         self.pressed = (self.pressed - dt * 6.0).max(0.0);
+        self.focus = approach(self.focus, if self.focused { 1.0 } else { 0.0 }, 16.0, dt);
+        self.clock += dt;
         self.pop.update(dt);
+    }
+
+    /// Presses the button from the gamepad / keyboard focus: the same feedback
+    /// as a click, including the "no" for a disabled button. Returns true if it activated.
+    pub fn activate(&mut self, sfx: &Sfx) -> bool {
+        if !self.enabled {
+            self.deny(sfx);
+            return false;
+        }
+        self.flash(sfx);
+        true
+    }
+
+    /// The "can't do that" feedback: a buzz and a little squash.
+    pub fn deny(&mut self, sfx: &Sfx) {
+        sfx.play(Sound::Deny);
+        self.pop.impulse(-1.5);
     }
 
     /// Returns true if a press at `pos` activates the button (and plays the feedback).
@@ -215,6 +243,16 @@ impl Button {
         let base_x = (r.x + (r.w - w) / 2.0).round();
         g.set_color(palette::INK.with_alpha(0.4));
         chamfer(g, Fill, r.x + 2.0, base_y + 2.0, r.w, r.h, cut);
+        if self.focus > 0.01 {
+            // Focus ring: a pulsing brass band around the button and its lip, with a dark edge.
+            let pulse = 0.8 + 0.2 * (self.clock * 6.0).sin();
+            let a = self.focus * pulse;
+            let (top, bottom) = (y.min(base_y), base_y + h);
+            g.set_color(palette::INK.with_alpha(a));
+            chamfer(g, Fill, x - 4.0, top - 4.0, w + 8.0, bottom - top + 8.0, cut + 4.0);
+            g.set_color(palette::GOLD.with_alpha(a));
+            chamfer(g, Fill, x - 3.0, top - 3.0, w + 6.0, bottom - top + 6.0, cut + 3.0);
+        }
         // Dark outline around the lip and the body, then the lip, then the body.
         g.set_color(palette::INK);
         chamfer(g, Fill, base_x - 1.0, base_y - 1.0, w + 2.0, h + 2.0, cut + 1.0);
@@ -228,6 +266,7 @@ impl Button {
         g.rectangle(Fill, x + cut, y + 1.0, w - cut * 2.0, 1.0);
         g.set_color(body.lerp(lip, 0.5));
         g.rectangle(Fill, x + cut, y + h - 2.0, w - cut * 2.0, 1.0);
+
 
         if let Some((image, q)) = &self.icon {
             // Icons are authored at card-art density.
@@ -258,6 +297,8 @@ pub struct Slider {
     pub rect: Rect,
     pub value: f32,
     pub color: Color,
+    /// Set by the scene when the gamepad / keyboard focus is on this slider's row.
+    pub focused: bool,
     dragging: bool,
     hover: f32,
     knob: Spring,
@@ -269,6 +310,7 @@ impl Slider {
             rect,
             value,
             color,
+            focused: false,
             dragging: false,
             hover: 0.0,
             knob: Spring::new(1.0),
@@ -300,6 +342,18 @@ impl Slider {
         true
     }
 
+    /// Steps the value by 5% (`dir` = -1 or +1), for the gamepad and arrow keys.
+    pub fn nudge(&mut self, dir: i32, sfx: &Sfx) {
+        let v = ((self.value * 20.0).round() + dir as f32).clamp(0.0, 20.0) / 20.0;
+        if (v - self.value).abs() > 0.001 {
+            self.knob.impulse(3.0);
+            self.set(v, sfx);
+        } else {
+            sfx.play(Sound::Deny);
+            self.knob.impulse(-2.0);
+        }
+    }
+
     fn set(&mut self, v: f32, sfx: &Sfx) {
         if (v - self.value).abs() > 0.001 {
             self.value = v;
@@ -309,7 +363,7 @@ impl Slider {
 
     /// Call every frame. Returns true when a drag just finished (a good time to save).
     pub fn update(&mut self, mouse: Vec2, down: bool, dt: f32, sfx: &Sfx) -> bool {
-        let over = self.hit().contains(mouse);
+        let over = self.hit().contains(mouse) || self.focused;
         self.hover = approach(self.hover, if over || self.dragging { 1.0 } else { 0.0 }, 18.0, dt);
         self.knob.target = if self.dragging { 1.25 } else { 1.0 + self.hover * 0.1 };
         self.knob.update(dt);

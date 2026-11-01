@@ -7,6 +7,11 @@
 //! from a queue of timed [`Cue`]s: the deal, trick collection, results and
 //! AI turns are all scheduled through it.
 //!
+//! Input: mouse clicks, touch (the card under your finger lifts, and lifting
+//! the finger plays it), keyboard shortcuts, and gamepad [`Nav`]: left/right
+//! walks the focus along your hand or the bid buttons, A plays or bids,
+//! Y toggles alone, Start pauses.
+//!
 //! - `layout.rs` where each place is on screen
 //! - `draw.rs`   all rendering (cards, sidebar, prompts, panels)
 
@@ -22,7 +27,7 @@ use crate::euchre::{
 };
 use crate::juice::Spring;
 use crate::palette;
-use crate::scene::{Scene, Shared, Transition};
+use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::title::Title;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
 use crate::sfx::Sound;
@@ -157,6 +162,8 @@ struct GameOver {
     again: Button,
     menu: Button,
     age: f32,
+    /// Gamepad focus: 0 = play again, 1 = main menu.
+    focus: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -170,6 +177,7 @@ enum PauseChoice {
 struct Pause {
     buttons: Vec<(PauseChoice, Button)>,
     pop: Spring,
+    focus: usize,
 }
 
 struct Particle {
@@ -192,6 +200,10 @@ pub struct Table {
     bids: Vec<(Bid, Button)>,
     alone: bool,
     hover: Option<Card>,
+    /// Gamepad / keyboard focus: an index into the human's hand (left to right)
+    /// while playing or discarding, and into `bids` while bidding.
+    card_focus: usize,
+    bid_focus: usize,
     bubbles: [Option<Bubble>; 4],
     toast: Option<Toast>,
     hint: Option<(String, f32)>,
@@ -251,6 +263,8 @@ impl Table {
             bids: Vec::new(),
             alone: false,
             hover: None,
+            card_focus: 0,
+            bid_focus: 0,
             bubbles: Default::default(),
             toast: None,
             hint: None,
@@ -543,6 +557,9 @@ impl Table {
                 }
             }
         }
+        if seat == HUMAN && matches!(action, Action::Play(_) | Action::Discard(_)) {
+            shared.tap();
+        }
         true
     }
 
@@ -619,6 +636,7 @@ impl Table {
         let big = result.kind != ResultKind::Made;
         if big {
             self.shake = 1.0;
+            shared.rumble(0.55, 0.4);
         }
         if we_scored {
             shared.sfx.play(if big { Sound::Fanfare } else { Sound::Pop });
@@ -647,7 +665,9 @@ impl Table {
                 again: Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0)),
                 menu: Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0)),
                 age: 0.0,
+                focus: 0,
             });
+            shared.rumble(if won { 0.7 } else { 0.35 }, if won { 0.6 } else { 0.3 });
             if won {
                 shared.sfx.play(Sound::Fanfare);
                 self.shake = 0.8;
@@ -700,6 +720,14 @@ impl Table {
         if wanted == self.prompt {
             return;
         }
+        if wanted == Prompt::Play {
+            // Keep the focus where it was if that card can be played, else jump to the first one that can.
+            let hand = layout::hand_cards(self, HUMAN);
+            let legal = r.legal_plays(HUMAN);
+            if !hand.get(self.card_focus).is_some_and(|c| legal.contains(c)) {
+                self.card_focus = hand.iter().position(|c| legal.contains(c)).unwrap_or(0);
+            }
+        }
         self.prompt = wanted;
         self.alone = false;
         self.bids.clear();
@@ -733,6 +761,12 @@ impl Table {
             }
             _ => {}
         }
+        // Focus PASS first (the usual call), unless the dealer is stuck.
+        self.bid_focus = row
+            .iter()
+            .position(|(k, b)| *k == Bid::Pass && b.enabled)
+            .or_else(|| row.iter().position(|(_, b)| b.enabled))
+            .unwrap_or(0);
         // Center the row above the hand.
         let gap = 6.0;
         let total: f32 = row.iter().map(|(_, b)| b.rect.w).sum::<f32>() + gap * (row.len().max(1) - 1) as f32;
@@ -817,6 +851,7 @@ impl Table {
                 (PauseChoice::Quit, Button::red("MAIN MENU", Rect::centered(cx, 218.0, w, 20.0))),
             ],
             pop,
+            focus: 0,
         });
         shared.sfx.play(Sound::Pop);
     }
@@ -838,13 +873,38 @@ impl Table {
         layout::hand_cards(self, HUMAN)
     }
 
+    /// The hand card the gamepad focus is on, while a card is wanted.
+    fn focused_card(&self) -> Option<Card> {
+        if !matches!(self.prompt, Prompt::Play | Prompt::Discard) {
+            return None;
+        }
+        let hand = self.human_hand_order();
+        hand.get(self.card_focus.min(hand.len().saturating_sub(1))).copied()
+    }
+
+    /// Presses the bid button at `i` from the gamepad.
+    fn press_bid(&mut self, i: usize, shared: &mut Shared) {
+        let Some((bid, b)) = self.bids.get_mut(i) else { return };
+        let bid = *bid;
+        if b.activate(&shared.sfx) {
+            shared.tap();
+            self.click_bid(bid, shared);
+        }
+    }
+
     // ------------------------------------------------------------------
     // Per-frame animation
     // ------------------------------------------------------------------
 
     fn animate(&mut self, shared: &mut Shared, dt: f32) {
         // Hover is tested against resting positions, so a lifted card doesn't flicker.
-        let hovered = if self.input_open() { layout::card_at(self, shared.mouse) } else { None };
+        let hovered = if !self.input_open() {
+            None
+        } else if shared.focus_visible() {
+            self.focused_card()
+        } else {
+            layout::card_at(self, shared.mouse)
+        };
         if hovered != self.hover {
             if let Some(c) = hovered {
                 let playable = match self.prompt {
@@ -959,10 +1019,12 @@ impl Scene for Table {
         if let Some(o) = &mut self.overlay {
             o.update(shared, dt);
         }
+        let focus = shared.focus_visible();
         if let Some(p) = &mut self.pause {
             p.pop.update(dt);
-            let mouse = if self.overlay.is_some() { vec2(-99.0, -99.0) } else { shared.mouse };
-            for (_, b) in &mut p.buttons {
+            let mouse = if self.overlay.is_some() { NO_POINTER } else { shared.mouse };
+            for (i, (_, b)) in p.buttons.iter_mut().enumerate() {
+                b.focused = focus && self.overlay.is_none() && i == p.focus;
                 b.update(mouse, dt, &shared.sfx);
             }
         }
@@ -987,17 +1049,20 @@ impl Scene for Table {
             }
         }
 
-        let mouse = if self.input_open() { shared.mouse } else { vec2(-99.0, -99.0) };
-        for (_, b) in &mut self.bids {
+        let open = self.input_open();
+        let mouse = if open { shared.mouse } else { NO_POINTER };
+        for (i, (_, b)) in self.bids.iter_mut().enumerate() {
+            b.focused = focus && open && i == self.bid_focus;
             b.update(mouse, dt, &shared.sfx);
         }
-        let menu_mouse = if self.pause.is_none() && self.overlay.is_none() { shared.mouse } else { vec2(-99.0, -99.0) };
+        let menu_mouse = if self.pause.is_none() && self.overlay.is_none() { shared.mouse } else { NO_POINTER };
         self.menu_button.update(menu_mouse, dt, &shared.sfx);
 
         if let Some(b) = &mut self.banner {
             b.age += dt;
             b.pop.update(dt);
-            let m = if self.pause.is_none() { shared.mouse } else { vec2(-99.0, -99.0) };
+            let m = if self.pause.is_none() { shared.mouse } else { NO_POINTER };
+            b.button.focused = focus && self.pause.is_none() && b.age > 0.4;
             b.button.update(m, dt, &shared.sfx);
             if self.autoplay && b.age > 2.0 {
                 self.continue_after_hand(shared);
@@ -1006,7 +1071,9 @@ impl Scene for Table {
         if let Some(g) = &mut self.game_over {
             g.age += dt;
             g.pop.update(dt);
-            let m = if self.pause.is_none() { shared.mouse } else { vec2(-99.0, -99.0) };
+            let m = if self.pause.is_none() { shared.mouse } else { NO_POINTER };
+            g.again.focused = focus && self.pause.is_none() && g.focus == 0;
+            g.menu.focused = focus && self.pause.is_none() && g.focus == 1;
             g.again.update(m, dt, &shared.sfx);
             g.menu.update(m, dt, &shared.sfx);
             if self.autoplay && g.age > 3.0 {
@@ -1085,6 +1152,121 @@ impl Scene for Table {
                     self.click_card(card, shared);
                 }
         Transition::None
+    }
+
+    fn nav(&mut self, shared: &mut Shared, nav: Nav) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            if o.nav(shared, nav) {
+                self.overlay = None;
+            }
+            return Transition::None;
+        }
+        if let Some(p) = &mut self.pause {
+            match nav {
+                Nav::Up | Nav::Down => {
+                    let n = p.buttons.len() as i32;
+                    p.focus = (p.focus as i32 + nav.dy()).rem_euclid(n) as usize;
+                }
+                Nav::Confirm => {
+                    let (choice, b) = &mut p.buttons[p.focus];
+                    let choice = *choice;
+                    b.flash(&shared.sfx);
+                    shared.tap();
+                    return self.pause_choice(choice, shared);
+                }
+                Nav::Back | Nav::Menu => {
+                    self.pause = None;
+                    shared.sfx.play(Sound::Select);
+                    shared.tap();
+                }
+                _ => {}
+            }
+            return Transition::None;
+        }
+        if nav == Nav::Menu {
+            shared.tap();
+            self.open_pause(shared);
+            return Transition::None;
+        }
+        if let Some(go) = &mut self.game_over {
+            match nav {
+                Nav::Left | Nav::Right | Nav::Up | Nav::Down => go.focus = 1 - go.focus,
+                Nav::Confirm if go.focus == 0 => {
+                    go.again.flash(&shared.sfx);
+                    shared.tap();
+                    self.new_game(shared);
+                }
+                Nav::Confirm => {
+                    go.menu.flash(&shared.sfx);
+                    shared.tap();
+                    return Transition::Switch(Box::new(Title::new()));
+                }
+                _ => {}
+            }
+            return Transition::None;
+        }
+        if let Some(b) = &mut self.banner {
+            if nav == Nav::Confirm && b.age > 0.4 {
+                b.button.flash(&shared.sfx);
+                shared.tap();
+                self.continue_after_hand(shared);
+            }
+            return Transition::None;
+        }
+        match self.prompt {
+            Prompt::OrderUp | Prompt::NameTrump => match nav {
+                Nav::Left | Nav::Right => {
+                    let n = self.bids.len().max(1) as i32;
+                    self.bid_focus = (self.bid_focus as i32 + nav.dx()).rem_euclid(n) as usize;
+                }
+                Nav::Confirm => self.press_bid(self.bid_focus, shared),
+                Nav::Alt => {
+                    if let Some(i) = self.bids.iter().position(|(k, _)| *k == Bid::Alone) {
+                        self.press_bid(i, shared);
+                    }
+                }
+                _ => {}
+            },
+            Prompt::Play | Prompt::Discard => match nav {
+                Nav::Left | Nav::Right => {
+                    let n = self.human_hand_order().len().max(1) as i32;
+                    let i = (self.card_focus.min(n as usize - 1) as i32 + nav.dx()).rem_euclid(n);
+                    self.card_focus = i as usize;
+                    // Playable cards tick from the hover logic; unplayable ones get a dull tap.
+                    if self.prompt == Prompt::Play
+                        && let Some(c) = self.focused_card()
+                        && !self.game.round.legal_plays(HUMAN).contains(&c)
+                    {
+                        shared.sfx.play_pitched(Sound::Tick, 0.6);
+                    }
+                }
+                Nav::Confirm => {
+                    if let Some(card) = self.focused_card() {
+                        self.click_card(card, shared);
+                    }
+                }
+                _ => {}
+            },
+            Prompt::None => {}
+        }
+        Transition::None
+    }
+
+    fn touch_pressed(&mut self, shared: &mut Shared, pos: Vec2) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            o.touch_pressed(shared, pos);
+        }
+        Transition::None
+    }
+
+    fn touch_released(&mut self, shared: &mut Shared, pos: Vec2) -> Transition {
+        if let Some(o) = &mut self.overlay {
+            if o.touch_released(shared, pos) {
+                self.overlay = None;
+            }
+            return Transition::None;
+        }
+        self.mouse_pressed(shared, pos, MouseButton::Left)
     }
 
     fn mouse_pressed(&mut self, shared: &mut Shared, pos: Vec2, button: MouseButton) -> Transition {

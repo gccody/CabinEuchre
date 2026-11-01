@@ -1,12 +1,16 @@
 //! The options panel (opened from the title screen or the pause menu).
 //! Volume, music and atmosphere are sliders; the rest step with arrows.
 //! Changes apply live (the app syncs settings every frame) and are saved on close.
+//!
+//! With a gamepad or the arrow keys, up/down picks a row (the BACK plaque is
+//! the last stop) and left/right changes it.
 
 use love2drs::prelude::*;
 
 use crate::juice::Spring;
 use crate::palette;
-use crate::scene::Shared;
+use crate::scene::{Nav, Shared};
+use crate::sfx::Sound;
 use crate::settings::{SPEED_NAMES, Settings, TARGETS};
 use crate::text::Text;
 use crate::ui::{self, Button, Rect, Slider};
@@ -20,13 +24,23 @@ enum Opt {
     Target,
     Stick,
     Fullscreen,
+    Rumble,
 }
 
-const OPTS: [Opt; 7] = [Opt::Volume, Opt::Music, Opt::Atmosphere, Opt::Speed, Opt::Target, Opt::Stick, Opt::Fullscreen];
+const OPTS: [Opt; 8] = [
+    Opt::Volume,
+    Opt::Music,
+    Opt::Atmosphere,
+    Opt::Speed,
+    Opt::Target,
+    Opt::Stick,
+    Opt::Fullscreen,
+    Opt::Rumble,
+];
 
 const PANEL: Rect = Rect::new(140.0, 40.0, 360.0, 280.0);
 const ROW_Y: f32 = PANEL.y + 46.0;
-const ROW_H: f32 = 26.0;
+const ROW_H: f32 = 24.0;
 /// Left edge and width of the control column.
 const CTRL_X: f32 = PANEL.x + 172.0;
 const CTRL_W: f32 = 168.0;
@@ -46,6 +60,8 @@ pub struct OptionsPanel {
     rows: Vec<Row>,
     back: Button,
     pop: Spring,
+    /// Gamepad / keyboard focus: a row index, or `rows.len()` for BACK.
+    focus: usize,
 }
 
 impl OptionsPanel {
@@ -77,14 +93,17 @@ impl OptionsPanel {
             rows,
             back: Button::brass("BACK", Rect::centered(PANEL.center().x, PANEL.y + PANEL.h - 20.0, 80.0, 18.0)),
             pop,
+            focus: 0,
         }
     }
 
     pub fn update(&mut self, shared: &mut Shared, dt: f32) {
         self.pop.update(dt);
-        for row in &mut self.rows {
+        let focus = shared.focus_visible().then_some(self.focus);
+        for (i, row) in self.rows.iter_mut().enumerate() {
             match &mut row.control {
                 Control::Slider(s) => {
+                    s.focused = focus == Some(i);
                     // Mirror the setting unless the player is dragging this slider.
                     if !s.is_dragging() {
                         s.value = slider_value(row.opt, &shared.settings).unwrap_or(s.value);
@@ -104,32 +123,103 @@ impl OptionsPanel {
                 }
             }
         }
+        self.back.focused = focus == Some(self.rows.len());
         self.back.update(shared.mouse, dt, &shared.sfx);
     }
 
     /// Returns true when the panel should close.
     pub fn mouse_pressed(&mut self, shared: &mut Shared, pos: Vec2) -> bool {
-        if self.back.click(pos, &shared.sfx) {
+        self.press(shared, pos, true, true)
+    }
+
+    /// A finger down starts dragging a slider; buttons wait for the release.
+    pub fn touch_pressed(&mut self, shared: &mut Shared, pos: Vec2) {
+        self.press(shared, pos, true, false);
+    }
+
+    /// A tap on a button. Returns true when the panel should close.
+    pub fn touch_released(&mut self, shared: &mut Shared, pos: Vec2) -> bool {
+        self.press(shared, pos, false, true)
+    }
+
+    fn press(&mut self, shared: &mut Shared, pos: Vec2, sliders: bool, buttons: bool) -> bool {
+        if buttons && self.back.click(pos, &shared.sfx) {
             shared.settings.save();
             return true;
         }
         for row in &mut self.rows {
             match &mut row.control {
-                Control::Slider(s) => {
+                Control::Slider(s) if sliders => {
                     s.value = slider_value(row.opt, &shared.settings).unwrap_or(s.value);
                     if s.press(pos, &shared.sfx) {
                         set_slider_value(row.opt, &mut shared.settings, s.value);
                     }
                 }
-                Control::Arrows(arrows) => {
+                Control::Arrows(arrows) if buttons => {
                     let (l, r) = &mut **arrows;
                     if l.click(pos, &shared.sfx) {
-                        step(row.opt, &mut shared.settings, -1);
+                        step(row.opt, &mut shared.settings, -1, false);
                     } else if r.click(pos, &shared.sfx) {
-                        step(row.opt, &mut shared.settings, 1);
+                        step(row.opt, &mut shared.settings, 1, false);
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Returns true when the panel should close.
+    pub fn nav(&mut self, shared: &mut Shared, nav: Nav) -> bool {
+        let stops = self.rows.len() + 1;
+        match nav {
+            Nav::Up | Nav::Down => {
+                self.focus = (self.focus as i32 + nav.dy()).rem_euclid(stops as i32) as usize;
+                // The BACK plaque ticks by itself when the focus lands on it.
+                if self.focus < self.rows.len() {
+                    shared.sfx.play(Sound::Hover);
+                }
+            }
+            Nav::Left | Nav::Right | Nav::Confirm => {
+                let Some(row) = self.rows.get_mut(self.focus) else {
+                    if nav == Nav::Confirm {
+                        self.back.flash(&shared.sfx);
+                        shared.settings.save();
+                        shared.tap();
+                        return true;
+                    }
+                    return false;
+                };
+                // Confirm cycles forward through a row's values.
+                let (dir, wrap) = if nav == Nav::Confirm { (1, true) } else { (nav.dx(), false) };
+                match &mut row.control {
+                    Control::Slider(s) => {
+                        if nav != Nav::Confirm {
+                            s.value = slider_value(row.opt, &shared.settings).unwrap_or(s.value);
+                            s.nudge(dir, &shared.sfx);
+                            set_slider_value(row.opt, &mut shared.settings, s.value);
+                        }
+                    }
+                    Control::Arrows(arrows) => {
+                        let (l, r) = &mut **arrows;
+                        let arrow = if dir < 0 { l } else { r };
+                        if step(row.opt, &mut shared.settings, dir, wrap) {
+                            arrow.flash(&shared.sfx);
+                            shared.tap();
+                        } else {
+                            // Already at the end: the arrow says "no".
+                            arrow.deny(&shared.sfx);
+                        }
                     }
                 }
             }
+            Nav::Back | Nav::Menu => {
+                self.back.flash(&shared.sfx);
+                shared.settings.save();
+                shared.tap();
+                return true;
+            }
+            _ => {}
         }
         false
     }
@@ -155,10 +245,21 @@ impl OptionsPanel {
         ui::panel(g, PANEL, palette::PANEL);
         Text::new("OPTIONS", c.x, PANEL.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
 
-        for row in &self.rows {
+        let focus = shared.focus_visible().then_some(self.focus);
+        for (i, row) in self.rows.iter().enumerate() {
             let y = row.y;
-            ui::inset(g, Rect::new(PANEL.x + 10.0, y - 11.0, PANEL.w - 20.0, 22.0), palette::PANEL_DARK);
-            Text::new(label(row.opt), PANEL.x + 20.0, y).anchor(0.0, 0.5).draw(g, font);
+            let inset = Rect::new(PANEL.x + 10.0, y - 10.0, PANEL.w - 20.0, 20.0);
+            let focused = focus == Some(i);
+            if focused {
+                // A pulsing brass frame around the focused row.
+                let pulse = 0.75 + 0.25 * (shared.time * 6.0).sin();
+                g.set_color(palette::GOLD.with_alpha(pulse));
+                ui::chamfer(g, Fill, inset.x - 2.0, inset.y - 2.0, inset.w + 4.0, inset.h + 4.0, 4.0);
+            }
+            let fill = if focused { palette::PANEL_DARK.lerp(palette::PANEL, 0.5) } else { palette::PANEL_DARK };
+            ui::inset(g, inset, fill);
+            let label_color = if focused { palette::GOLD } else { palette::CREAM };
+            Text::new(label(row.opt), PANEL.x + 20.0, y).color(label_color).anchor(0.0, 0.5).draw(g, font);
             let value = value_text(row.opt, &shared.settings);
             match &row.control {
                 Control::Slider(s) => {
@@ -197,6 +298,7 @@ fn label(opt: Opt) -> &'static str {
         Opt::Target => "Points to win",
         Opt::Stick => "Stick the dealer",
         Opt::Fullscreen => "Fullscreen",
+        Opt::Rumble => "Controller rumble",
     }
 }
 
@@ -217,6 +319,7 @@ fn value_text(opt: Opt, s: &Settings) -> String {
         Opt::Target => s.target.to_string(),
         Opt::Stick => on_off(s.stick_the_dealer),
         Opt::Fullscreen => on_off(s.fullscreen),
+        Opt::Rumble => on_off(s.rumble),
     }
 }
 
@@ -239,15 +342,24 @@ fn set_slider_value(opt: Opt, s: &mut Settings, v: f32) {
     }
 }
 
-fn step(opt: Opt, s: &mut Settings, dir: i32) {
+/// Steps an arrow option by `dir`, clamping at the ends (or wrapping around
+/// when `wrap`). Returns whether the value changed.
+fn step(opt: Opt, s: &mut Settings, dir: i32, wrap: bool) -> bool {
+    let next = |i: usize, n: usize| -> usize {
+        let j = i as i32 + dir;
+        if wrap { j.rem_euclid(n as i32) as usize } else { j.clamp(0, n as i32 - 1) as usize }
+    };
+    let before = s.clone();
     match opt {
-        Opt::Speed => s.speed = (s.speed as i32 + dir).clamp(0, 2) as usize,
+        Opt::Speed => s.speed = next(s.speed, SPEED_NAMES.len()),
         Opt::Target => {
-            let i = TARGETS.iter().position(|&t| t == s.target).unwrap_or(2) as i32;
-            s.target = TARGETS[(i + dir).clamp(0, 2) as usize];
+            let i = TARGETS.iter().position(|&t| t == s.target).unwrap_or(2);
+            s.target = TARGETS[next(i, TARGETS.len())];
         }
         Opt::Stick => s.stick_the_dealer = !s.stick_the_dealer,
         Opt::Fullscreen => s.fullscreen = !s.fullscreen,
+        Opt::Rumble => s.rumble = !s.rumble,
         Opt::Volume | Opt::Music | Opt::Atmosphere => {}
     }
+    *s != before
 }

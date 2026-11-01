@@ -6,7 +6,7 @@ use crate::cards::Pose;
 use crate::euchre::{Card, Rank, Suit};
 use crate::juice::{self, Spring};
 use crate::palette;
-use crate::scene::Shared;
+use crate::scene::{Nav, Shared};
 use crate::sfx::Sound;
 use crate::text::{LINE_HEIGHT, Text};
 use crate::ui::{self, Button, Rect};
@@ -74,13 +74,25 @@ const PAGES: &[Page] = &[
     },
     Page {
         title: "CONTROLS",
-        body: "Click a card to play it, or press 1-6.\n\
+        body: "Click or tap a card to play it, or press 1-6. On a touchscreen, slide your finger \
+               along your hand to look the cards over, then lift it to play.\n\n\
                Bid with the buttons above your hand, or with keys:\n\
                O order up, P pass, A alone, C D S H name a suit.\n\
-               Space or Enter continues after a hand.\n\
-               Esc pauses the game.\n\n\
+               Space or Enter continues after a hand. Esc pauses the game.\n\n\
                F2 toggles the lamplight effect. F11 toggles fullscreen.\n\
                Change speed, volume and house rules in Options.",
+        cards: &[],
+    },
+    Page {
+        title: "WITH A CONTROLLER",
+        body: "D-pad or left stick: move the gold highlight.\n\
+               A: play the highlighted card, or press the button.\n\
+               B: back out of a menu.\n\
+               Y: toggle going alone while bidding.\n\
+               Start: pause the game.\n\
+               LB / RB: turn these pages.\n\n\
+               The arrow keys and Enter work the same way on a keyboard.\n\n\
+               Big moments rumble the controller. Turn that off in Options.",
         cards: &[],
     },
 ];
@@ -142,17 +154,41 @@ impl RulesPanel {
         false
     }
 
+    /// Returns true when the panel should close.
+    pub fn nav(&mut self, shared: &mut Shared, nav: Nav) -> bool {
+        match nav {
+            Nav::Left | Nav::PrevPage => self.turn(shared, -1),
+            Nav::Right | Nav::NextPage => self.turn(shared, 1),
+            Nav::Confirm => {
+                shared.tap();
+                if self.page + 1 == PAGES.len() {
+                    self.close.flash(&shared.sfx);
+                    return true;
+                }
+                self.next.flash(&shared.sfx);
+                self.turn(shared, 1);
+            }
+            Nav::Back | Nav::Menu => {
+                self.close.flash(&shared.sfx);
+                shared.tap();
+                return true;
+            }
+            Nav::Up | Nav::Down | Nav::Alt => {}
+        }
+        false
+    }
+
     pub fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> bool {
         match key {
             Key::Escape => {
                 self.close.flash(&shared.sfx);
                 true
             }
-            Key::Left | Key::A => {
+            Key::A => {
                 self.turn(shared, -1);
                 false
             }
-            Key::Right | Key::D | Key::Space | Key::Enter => {
+            Key::D | Key::Space | Key::Enter => {
                 if self.page + 1 == PAGES.len() && matches!(key, Key::Space | Key::Enter) {
                     self.close.flash(&shared.sfx);
                     return true;
