@@ -24,7 +24,7 @@ use crate::card::{Card, Suit};
 use crate::round::{Action, RuleError, Seat};
 
 /// Bumped whenever a message changes shape. A room refuses other versions.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Longest player name, in characters.
 pub const MAX_NAME_LEN: usize = 10;
