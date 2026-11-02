@@ -18,10 +18,10 @@
 //! steps=pass order discard:Tc play:Jh play:Ah play:Kh play:Qh next
 //! ```
 
-use super::card::{Card, Rank, Suit};
-use super::game::{Match, Step};
-use super::rng::Rng;
-use super::round::{Action, Phase, SEATS};
+use crate::card::{Card, Suit};
+use crate::game::{Match, Step};
+use crate::rng::Rng;
+use crate::round::{Action, Phase, SEATS};
 
 const VERSION: u32 = 1;
 
@@ -134,48 +134,16 @@ impl Match {
     }
 }
 
-fn card_token(c: Card) -> String {
-    let rank = ['9', 'T', 'J', 'Q', 'K', 'A'][c.rank.index()];
-    format!("{rank}{}", suit_char(c.suit))
-}
-
-fn suit_char(s: Suit) -> char {
-    ['c', 'd', 's', 'h'][s.index()]
-}
-
-fn parse_suit(s: &str) -> Option<Suit> {
-    let mut chars = s.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    Suit::ALL.into_iter().find(|&suit| suit_char(suit) == c)
-}
-
-fn parse_card(s: &str) -> Option<Card> {
-    let mut chars = s.chars();
-    let rank = match chars.next()? {
-        '9' => Rank::Nine,
-        'T' => Rank::Ten,
-        'J' => Rank::Jack,
-        'Q' => Rank::Queen,
-        'K' => Rank::King,
-        'A' => Rank::Ace,
-        _ => return None,
-    };
-    Some(Card::new(rank, parse_suit(chars.as_str())?))
-}
-
 fn step_token(step: Step) -> String {
     match step {
         Step::Advance => "next".into(),
         Step::Act(Action::Pass) => "pass".into(),
         Step::Act(Action::OrderUp { alone: false }) => "order".into(),
         Step::Act(Action::OrderUp { alone: true }) => "order-alone".into(),
-        Step::Act(Action::Call { suit, alone: false }) => format!("call:{}", suit_char(suit)),
-        Step::Act(Action::Call { suit, alone: true }) => format!("call-alone:{}", suit_char(suit)),
-        Step::Act(Action::Discard(c)) => format!("discard:{}", card_token(c)),
-        Step::Act(Action::Play(c)) => format!("play:{}", card_token(c)),
+        Step::Act(Action::Call { suit, alone: false }) => format!("call:{}", suit.token()),
+        Step::Act(Action::Call { suit, alone: true }) => format!("call-alone:{}", suit.token()),
+        Step::Act(Action::Discard { card: c }) => format!("discard:{}", c.token()),
+        Step::Act(Action::Play { card: c }) => format!("play:{}", c.token()),
     }
 }
 
@@ -186,10 +154,10 @@ fn parse_step(token: &str) -> Option<Step> {
         ("pass", "") => Action::Pass,
         ("order", "") => Action::OrderUp { alone: false },
         ("order-alone", "") => Action::OrderUp { alone: true },
-        ("call", s) => Action::Call { suit: parse_suit(s)?, alone: false },
-        ("call-alone", s) => Action::Call { suit: parse_suit(s)?, alone: true },
-        ("discard", c) => Action::Discard(parse_card(c)?),
-        ("play", c) => Action::Play(parse_card(c)?),
+        ("call", s) => Action::Call { suit: Suit::parse(s)?, alone: false },
+        ("call-alone", s) => Action::Call { suit: Suit::parse(s)?, alone: true },
+        ("discard", c) => Action::Discard { card: Card::parse(c)? },
+        ("play", c) => Action::Play { card: Card::parse(c)? },
         _ => return None,
     };
     Some(Step::Act(action))
@@ -198,7 +166,7 @@ fn parse_step(token: &str) -> Option<Step> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::euchre::ai::choose;
+    use crate::ai::choose;
 
     /// Everything that matters about a match, for comparing a loaded copy.
     fn fingerprint(m: &Match) -> String {
@@ -278,13 +246,6 @@ mod tests {
         ];
         for (text, why) in cases {
             assert!(Match::from_save(text).is_err(), "should reject: {why}");
-        }
-    }
-
-    #[test]
-    fn card_tokens_round_trip() {
-        for c in Card::deck() {
-            assert_eq!(parse_card(&card_token(c)), Some(c));
         }
     }
 }

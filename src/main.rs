@@ -1,7 +1,7 @@
 //! Euchre: entry point.
 //!
 //! Module map:
-//! - `euchre`   the rules, scoring and AI (pure, unit-tested, no framework code)
+//! - `euchre`   the `euchre-core` crate: rules, scoring, AI, saves and the online protocol
 //! - `app`      the love2drs `Game` impl: owns the active scene and the render pipeline
 //! - `scene`    the `Scene` trait, shared resources and transitions between screens
 //! - `scenes`   title, table and the options / how-to-play overlays
@@ -18,7 +18,7 @@
 mod app;
 mod assets;
 mod cards;
-mod euchre;
+use euchre_core as euchre;
 mod juice;
 mod palette;
 mod render;

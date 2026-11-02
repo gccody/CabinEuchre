@@ -1,8 +1,8 @@
 //! Heuristic computer players. They only look at what their seat could know:
 //! their own hand, the up card, trump, who made it, and the cards played so far.
 
-use super::card::{Card, Rank, Suit};
-use super::round::{Action, Phase, Round, Seat, partner_of, team_of};
+use crate::card::{Card, Rank, Suit};
+use crate::round::{Action, Phase, Round, Seat, partner_of, team_of};
 
 /// Points needed (see [`hand_strength`]) to make trump.
 const CALL_THRESHOLD: f32 = 6.3;
@@ -16,9 +16,9 @@ pub fn choose(round: &Round, seat: Seat) -> Action {
         Phase::NameTrump => name_trump(round, seat),
         Phase::DealerDiscard => {
             let trump = round.trump.expect("trump set before discard");
-            Action::Discard(best_discard(&round.hands[seat], trump))
+            Action::Discard { card: best_discard(&round.hands[seat], trump) }
         }
-        Phase::Play => Action::Play(choose_play(round, seat)),
+        Phase::Play => Action::Play { card: choose_play(round, seat) },
         Phase::TrickDone | Phase::HandOver | Phase::Misdeal => Action::Pass,
     }
 }
@@ -233,8 +233,8 @@ fn lowest(cards: &[Card], trump: Suit) -> Card {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::euchre::game::Match;
-    use crate::euchre::round::ResultKind;
+    use crate::game::Match;
+    use crate::round::ResultKind;
 
     fn c(rank: Rank, suit: Suit) -> Card {
         Card::new(rank, suit)

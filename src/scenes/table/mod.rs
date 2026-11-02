@@ -665,14 +665,14 @@ impl Table {
                     self.sit_out_partner(seat);
                 }
             }
-            Action::Discard(card) => {
+            Action::Discard { card } => {
                 self.move_card(card, Place::Pile);
                 sfx.play(Sound::CardSlide);
                 self.cue(Cue::Wait(0.4));
                 self.cue(Cue::KittyAside);
                 self.cue(Cue::Wait(0.6));
             }
-            Action::Play(card) => {
+            Action::Play { card } => {
                 self.move_card(card, Place::Trick(seat));
                 let n = self.game.round.trick.len() as f32;
                 sfx.play_pitched(Sound::CardPlace, 1.0 + n * 0.03);
@@ -681,7 +681,7 @@ impl Table {
                 }
             }
         }
-        if seat == HUMAN && matches!(action, Action::Play(_) | Action::Discard(_)) {
+        if seat == HUMAN && matches!(action, Action::Play { .. } | Action::Discard { .. }) {
             shared.tap();
         }
         true
@@ -941,7 +941,7 @@ impl Table {
     fn click_card(&mut self, card: Card, shared: &mut Shared) {
         match self.prompt {
             Prompt::Play => {
-                if !self.perform(HUMAN, Action::Play(card), shared) {
+                if !self.perform(HUMAN, Action::Play { card }, shared) {
                     // Illegal: shake the card "no".
                     let sprite = &mut self.sprites[card.id()];
                     sprite.rot.impulse(2.5);
@@ -949,7 +949,7 @@ impl Table {
                 }
             }
             Prompt::Discard => {
-                self.perform(HUMAN, Action::Discard(card), shared);
+                self.perform(HUMAN, Action::Discard { card }, shared);
             }
             _ => {
                 // Not your turn: a little wiggle so the card still feels alive.

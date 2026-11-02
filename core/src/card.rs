@@ -5,7 +5,10 @@
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Suit {
     Clubs,
     Diamonds,
@@ -156,6 +159,59 @@ impl Card {
     pub fn label(self) -> String {
         format!("{}{}", self.rank.label(), self.suit.symbol())
     }
+
+    /// Two plain ASCII characters such as `"Jh"` or `"Tc"`: how cards are
+    /// written in save files and in the online protocol.
+    pub fn token(self) -> String {
+        let rank = ['9', 'T', 'J', 'Q', 'K', 'A'][self.rank.index()];
+        format!("{rank}{}", self.suit.token())
+    }
+
+    /// Reads [`Card::token`] text.
+    pub fn parse(s: &str) -> Option<Card> {
+        let mut chars = s.chars();
+        let rank = match chars.next()? {
+            '9' => Rank::Nine,
+            'T' => Rank::Ten,
+            'J' => Rank::Jack,
+            'Q' => Rank::Queen,
+            'K' => Rank::King,
+            'A' => Rank::Ace,
+            _ => return None,
+        };
+        Some(Card::new(rank, Suit::parse(chars.as_str())?))
+    }
+}
+
+impl Suit {
+    /// One lowercase letter: `c`, `d`, `s` or `h`.
+    pub fn token(self) -> char {
+        ['c', 'd', 's', 'h'][self.index()]
+    }
+
+    /// Reads [`Suit::token`] text.
+    pub fn parse(s: &str) -> Option<Suit> {
+        let mut chars = s.chars();
+        let c = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+        Suit::ALL.into_iter().find(|&suit| suit.token() == c)
+    }
+}
+
+// Cards travel as their two-letter token ("Jh"), which keeps messages small and readable.
+impl Serialize for Card {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.token())
+    }
+}
+
+impl<'de> Deserialize<'de> for Card {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Card, D::Error> {
+        let s = String::deserialize(d)?;
+        Card::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("not a card: {s:?}")))
+    }
 }
 
 impl fmt::Display for Card {
@@ -170,6 +226,18 @@ mod tests {
 
     fn c(rank: Rank, suit: Suit) -> Card {
         Card::new(rank, suit)
+    }
+
+    #[test]
+    fn tokens_round_trip() {
+        for c in Card::deck() {
+            assert_eq!(Card::parse(&c.token()), Some(c));
+            let json = serde_json::to_string(&c).unwrap();
+            assert_eq!(json, format!("\"{}\"", c.token()));
+            assert_eq!(serde_json::from_str::<Card>(&json).unwrap(), c);
+        }
+        assert_eq!(Card::parse("Zz"), None);
+        assert_eq!(Card::parse("Jhh"), None);
     }
 
     #[test]

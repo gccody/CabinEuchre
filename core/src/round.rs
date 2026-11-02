@@ -3,8 +3,10 @@
 //! [`Round::apply`] and [`Round::advance`], so the table scene can pause
 //! between steps to animate.
 
-use super::card::{Card, Suit};
-use super::rng::Rng;
+use serde::{Deserialize, Serialize};
+
+use crate::card::{Card, Suit};
+use crate::rng::Rng;
 
 pub type Seat = usize;
 
@@ -43,7 +45,8 @@ pub enum Phase {
     Misdeal,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
     Pass,
     /// First round: make the up card's suit trump (the dealer picks it up).
@@ -51,11 +54,12 @@ pub enum Action {
     /// Second round: name trump.
     Call { suit: Suit, alone: bool },
     /// The dealer discards after picking up.
-    Discard(Card),
-    Play(Card),
+    Discard { card: Card },
+    Play { card: Card },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RuleError {
     NotYourTurn,
     WrongPhase,
@@ -224,6 +228,18 @@ impl Round {
     }
 
     pub fn apply(&mut self, seat: Seat, action: Action) -> Result<(), RuleError> {
+        self.apply_checked(seat, action, true)
+    }
+
+    /// Applies another player's move that the server already checked, to a
+    /// round whose hidden hands are only guesses (see `mirror.rs`): the guessed
+    /// hand may hold cards of the led suit that the real one didn't, so
+    /// following suit is not enforced. Everything else is.
+    pub fn apply_revealed(&mut self, seat: Seat, action: Action) -> Result<(), RuleError> {
+        self.apply_checked(seat, action, false)
+    }
+
+    fn apply_checked(&mut self, seat: Seat, action: Action, follow_suit: bool) -> Result<(), RuleError> {
         if self.to_act() != Some(seat) {
             return Err(RuleError::NotYourTurn);
         }
@@ -248,7 +264,7 @@ impl Round {
                     self.turn = self.dealer;
                 }
             }
-            (Phase::DealerDiscard, Action::Discard(card)) => {
+            (Phase::DealerDiscard, Action::Discard { card }) => {
                 let hand = &mut self.hands[seat];
                 let i = hand.iter().position(|&c| c == card).ok_or(RuleError::CardNotInHand)?;
                 hand.remove(i);
@@ -273,11 +289,11 @@ impl Round {
                 self.set_trump(suit, seat, alone);
                 self.start_play();
             }
-            (Phase::Play, Action::Play(card)) => {
+            (Phase::Play, Action::Play { card }) => {
                 if !self.hands[seat].contains(&card) {
                     return Err(RuleError::CardNotInHand);
                 }
-                if !self.legal_plays(seat).contains(&card) {
+                if follow_suit && !self.legal_plays(seat).contains(&card) {
                     return Err(RuleError::MustFollowSuit);
                 }
                 self.hands[seat].retain(|&c| c != card);
@@ -367,7 +383,7 @@ impl Round {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::euchre::card::Rank;
+    use crate::card::Rank;
     use Rank::*;
     use Suit::*;
 
@@ -413,8 +429,8 @@ mod tests {
         assert_eq!(r.phase, Phase::DealerDiscard);
         assert_eq!(r.to_act(), Some(3));
         assert_eq!(r.hands[3].len(), 6);
-        assert_eq!(r.apply(3, Action::Discard(c(Ace, Clubs))), Err(RuleError::CardNotInHand));
-        r.apply(3, Action::Discard(c(King, Clubs))).unwrap();
+        assert_eq!(r.apply(3, Action::Discard { card: c(Ace, Clubs) }), Err(RuleError::CardNotInHand));
+        r.apply(3, Action::Discard { card: c(King, Clubs) }).unwrap();
         assert_eq!(r.hands[3].len(), 5);
         assert_eq!(r.phase, Phase::Play);
         assert_eq!(r.to_act(), Some(0), "left of dealer leads");
@@ -453,22 +469,22 @@ mod tests {
     fn left_bower_must_follow_trump_not_its_printed_suit() {
         let mut r = sample();
         r.apply(0, Action::OrderUp { alone: false }).unwrap();
-        r.apply(3, Action::Discard(c(King, Clubs))).unwrap();
+        r.apply(3, Action::Discard { card: c(King, Clubs) }).unwrap();
         // Hearts are trump, so seat 0's J♦ is the left bower: leading it leads trump.
-        r.apply(0, Action::Play(c(Jack, Diamonds))).unwrap();
+        r.apply(0, Action::Play { card: c(Jack, Diamonds) }).unwrap();
         assert_eq!(r.led_suit(), Some(Hearts));
         // Seat 1 has A♥ (trump) and must play it.
         assert_eq!(r.legal_plays(1), vec![c(Ace, Hearts)]);
-        assert_eq!(r.apply(1, Action::Play(c(King, Spades))), Err(RuleError::MustFollowSuit));
-        r.apply(1, Action::Play(c(Ace, Hearts))).unwrap();
+        assert_eq!(r.apply(1, Action::Play { card: c(King, Spades) }), Err(RuleError::MustFollowSuit));
+        r.apply(1, Action::Play { card: c(Ace, Hearts) }).unwrap();
         // Seat 2 has K♥.
         assert_eq!(r.legal_plays(2), vec![c(King, Hearts)]);
-        r.apply(2, Action::Play(c(King, Hearts))).unwrap();
+        r.apply(2, Action::Play { card: c(King, Hearts) }).unwrap();
         // Seat 3 (dealer) picked up 9♥ and holds Q♥.
         let mut legal = r.legal_plays(3);
         legal.sort();
         assert_eq!(legal, vec![c(Nine, Hearts), c(Queen, Hearts)]);
-        r.apply(3, Action::Play(c(Queen, Hearts))).unwrap();
+        r.apply(3, Action::Play { card: c(Queen, Hearts) }).unwrap();
         assert_eq!(r.phase, Phase::TrickDone);
         assert_eq!(r.turn, 0, "left bower beats the ace");
         r.advance();
@@ -490,7 +506,7 @@ mod tests {
         r.maker = Some(0);
         r.phase = Phase::Play;
         r.turn = 0;
-        r.apply(0, Action::Play(c(Ace, Diamonds))).unwrap();
+        r.apply(0, Action::Play { card: c(Ace, Diamonds) }).unwrap();
         let mut legal = r.legal_plays(1);
         legal.sort();
         assert_eq!(legal, vec![c(Nine, Clubs), c(Jack, Diamonds)], "void in diamonds: anything goes");
@@ -502,13 +518,13 @@ mod tests {
         r.apply(0, Action::OrderUp { alone: true }).unwrap();
         assert!(r.is_sitting_out(2));
         assert_eq!(r.active_players(), 3);
-        r.apply(3, Action::Discard(c(King, Clubs))).unwrap();
+        r.apply(3, Action::Discard { card: c(King, Clubs) }).unwrap();
         assert_eq!(r.to_act(), Some(0));
-        r.apply(0, Action::Play(c(Ace, Clubs))).unwrap();
+        r.apply(0, Action::Play { card: c(Ace, Clubs) }).unwrap();
         assert_eq!(r.to_act(), Some(1));
-        r.apply(1, Action::Play(c(Nine, Clubs))).unwrap();
+        r.apply(1, Action::Play { card: c(Nine, Clubs) }).unwrap();
         assert_eq!(r.to_act(), Some(3), "partner (seat 2) is skipped");
-        r.apply(3, Action::Play(c(Jack, Spades))).unwrap();
+        r.apply(3, Action::Play { card: c(Jack, Spades) }).unwrap();
         assert_eq!(r.phase, Phase::TrickDone);
         assert_eq!(r.turn, 0, "A♣ wins: no trump played");
     }
@@ -552,6 +568,6 @@ mod tests {
     fn out_of_turn_is_rejected() {
         let mut r = sample();
         assert_eq!(r.apply(2, Action::Pass), Err(RuleError::NotYourTurn));
-        assert_eq!(r.apply(0, Action::Play(c(Jack, Hearts))), Err(RuleError::WrongPhase));
+        assert_eq!(r.apply(0, Action::Play { card: c(Jack, Hearts) }), Err(RuleError::WrongPhase));
     }
 }

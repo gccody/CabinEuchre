@@ -1,0 +1,11 @@
+[package]
+name = "euchre-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Euchre rules, AI, saves and the online room protocol. No framework or I/O code, so it builds for the game and for the Cloudflare server (wasm)."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

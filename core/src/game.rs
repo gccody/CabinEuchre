@@ -4,8 +4,8 @@
 //! before the shuffle) and every step taken since, so it can be saved as a
 //! tiny snapshot and rebuilt exactly by replaying those steps (see `save.rs`).
 
-use super::rng::Rng;
-use super::round::{Action, HandResult, Phase, Round, RuleError, Seat, next_seat};
+use crate::rng::Rng;
+use crate::round::{Action, HandResult, Phase, Round, RuleError, Seat, next_seat};
 
 /// One thing that happened in the current hand, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,12 +28,12 @@ pub struct Match {
     /// Identifies this game (its seed), so a save file can tell whether it
     /// belongs to the game being played.
     pub id: u64,
-    pub(super) rng: Rng,
+    pub(crate) rng: Rng,
     /// The RNG just before the current hand was shuffled.
-    pub(super) hand_rng: Rng,
+    pub(crate) hand_rng: Rng,
     /// Everything done in the current hand, so it can be replayed.
-    pub(super) log: Vec<Step>,
-    pub(super) scored: bool,
+    pub(crate) log: Vec<Step>,
+    pub(crate) scored: bool,
 }
 
 impl Match {
@@ -44,7 +44,7 @@ impl Match {
     }
 
     /// A match at the start of a hand: `rng` is about to shuffle it.
-    pub(super) fn starting_hand(
+    pub(crate) fn starting_hand(
         scores: [u32; 2],
         target: u32,
         stick_the_dealer: bool,
