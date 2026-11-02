@@ -24,14 +24,14 @@ use crate::card::{Card, Suit};
 use crate::round::{Action, RuleError, Seat};
 
 /// Bumped whenever a message changes shape. A room refuses other versions.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Longest player name, in characters.
 pub const MAX_NAME_LEN: usize = 10;
 
 /// Letters a room code is made from: no I or O, which read like 1 and 0.
 pub const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
-pub const CODE_LEN: usize = 5;
+pub const CODE_LEN: usize = 6;
 
 /// From a player's game to their room.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -268,8 +268,9 @@ mod tests {
         assert_eq!(clean_name("  rosa♥ <b>  "), "ROSA B");
         assert_eq!(clean_name("a very long name indeed"), "A VERY LON");
         assert_eq!(clean_name("   "), "PLAYER");
-        assert_eq!(clean_code(" kqjta "), Some("KQJTA".into()));
-        assert_eq!(clean_code("KQJT0"), None);
+        assert_eq!(clean_code(" kqjtab "), Some("KQJTAB".into()));
+        assert_eq!(clean_code("KQJTA0"), None);
+        assert_eq!(clean_code("KQJTA"), None, "the old length");
         assert_eq!(clean_code("KQJ"), None);
         let mut n = 0;
         let code = make_code(|| {

@@ -11,7 +11,7 @@ game-over screens, pause menu, save & quit with CONTINUE on the title, options (
 an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
 macOS and Linux, and on Android and iOS phones and tablets (see "Phones and tablets").
 
-**Online play** (cross-platform): host a table or join one with a 5-letter code; bots fill empty
+**Online play** (cross-platform): host a table or join one with a 6-letter code; bots fill empty
 seats. Rooms run on a Cloudflare Worker with one Durable Object per table (`server/`). Steam builds
 (`--features steam`) add "Join Game" from the friends list and an invite button. Tables are private:
 "Join Game" only asks the host (LET IN / NO) unless the host made the table public, while an

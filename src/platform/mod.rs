@@ -120,13 +120,13 @@ mod tests {
 
     #[test]
     fn join_requests() {
-        request_join("+connect kqjta");
-        assert_eq!(take_join_request(), Some(JoinRequest::Code("KQJTA".into())));
+        request_join("+connect kqjtab");
+        assert_eq!(take_join_request(), Some(JoinRequest::Code("KQJTAB".into())));
         assert_eq!(take_join_request(), None, "taken once");
         let handle = "ab".repeat(32);
         request_join(&format!("+knock {}", handle.to_uppercase()));
         assert_eq!(take_join_request(), Some(JoinRequest::Knock(handle)));
-        for junk in ["not a code", "+connect KQJ", "+knock 1234", "KQJTA"] {
+        for junk in ["not a code", "+connect KQJ", "+connect KQJTA", "+knock 1234", "KQJTAB"] {
             request_join(junk);
             assert_eq!(take_join_request(), None, "{junk}");
         }

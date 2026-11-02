@@ -3,7 +3,7 @@
 //!
 //! Stages:
 //! - **Menu**: HOST A TABLE, JOIN WITH A CODE, your name.
-//! - **Entry**: an on-screen keyboard for the five-letter code (or your
+//! - **Entry**: an on-screen keyboard for the six-letter code (or your
 //!   name). Mouse, touch, gamepad and a real keyboard all type on it, so it
 //!   works the same on a phone, a Steam Deck or a desktop.
 //! - **Connecting**, then **Seated**: the room code in big brass tiles, the
@@ -22,7 +22,7 @@ use std::collections::VecDeque;
 use love2drs::prelude::*;
 
 use crate::device;
-use crate::euchre::protocol::{ClientMsg, ErrorCode, KnockInfo, SeatKind, SeatsInfo, ServerMsg, clean_code};
+use crate::euchre::protocol::{CODE_LEN, ClientMsg, ErrorCode, KnockInfo, SeatKind, SeatsInfo, ServerMsg, clean_code};
 use crate::juice::Spring;
 use crate::net::online::Join;
 use crate::net::{Connection, Link, Status, seat_memory};
@@ -532,7 +532,7 @@ impl Lobby {
 
     fn type_char(&mut self, ch: char, shared: &mut Shared) {
         let max = match self.stage {
-            Stage::Entry(Field::Code) => 5,
+            Stage::Entry(Field::Code) => CODE_LEN,
             _ => crate::euchre::protocol::MAX_NAME_LEN,
         };
         if self.entry.chars().count() >= max || (ch == ' ' && (self.entry.is_empty() || self.entry.ends_with(' '))) {
@@ -543,7 +543,7 @@ impl Lobby {
         shared.sfx.play_pitched(Sound::Tick, 1.0 + self.entry.len() as f32 * 0.05);
         // A full code jumps the focus to JOIN.
         if matches!(self.stage, Stage::Entry(Field::Code))
-            && self.entry.len() == 5
+            && self.entry.len() == CODE_LEN
             && let Some(i) = self.buttons.iter().position(|(a, _)| *a == Act::Done)
         {
             self.focus = i;
@@ -768,7 +768,7 @@ impl Scene for Lobby {
                 match field {
                     Field::Code => {
                         let letters: Vec<char> = self.entry.chars().collect();
-                        draw_tiles(g, shared, CX, &letters, 5, 112.0 - lift * 1.2, self.age);
+                        draw_tiles(g, shared, CX, &letters, 112.0 - lift * 1.2, self.age);
                     }
                     Field::Name => {
                         let name_y = 112.0 - lift * 1.2;
@@ -800,7 +800,7 @@ impl Scene for Lobby {
                 if let Some(code) = &self.code {
                     Text::new("TABLE CODE", CX, 76.0).color(palette::MUTED).center().draw(g, font);
                     let letters: Vec<char> = code.chars().collect();
-                    draw_tiles(g, shared, CX, &letters, 5, 100.0, 99.0);
+                    draw_tiles(g, shared, CX, &letters, 100.0, 99.0);
                     Text::new("Anyone with the code can sit right down.", CX, 126.0)
                         .color(palette::MUTED)
                         .center()
@@ -1017,7 +1017,7 @@ impl Lobby {
         if let Some(code) = &self.code {
             Text::new("TABLE CODE", lx, 50.0).color(palette::MUTED).center().draw(g, font);
             let letters: Vec<char> = code.chars().collect();
-            draw_tiles(g, shared, lx, &letters, 5, 76.0, 99.0);
+            draw_tiles(g, shared, lx, &letters, 76.0, 99.0);
             Text::new("Anyone with the code can", lx, 106.0).color(palette::MUTED).center().draw(g, font);
             Text::new("sit right down.", lx, 118.0).color(palette::MUTED).center().draw(g, font);
         }
@@ -1078,9 +1078,10 @@ impl Lobby {
     }
 }
 
-/// Five letter tiles (brass for typed letters, an empty slot otherwise), centered on `cx`.
-fn draw_tiles(g: &mut Graphics, shared: &Shared, cx: f32, letters: &[char], n: usize, y: f32, age: f32) {
+/// A code's letter tiles (brass for typed letters, an empty slot otherwise), centered on `cx`.
+fn draw_tiles(g: &mut Graphics, shared: &Shared, cx: f32, letters: &[char], y: f32, age: f32) {
     let font = &shared.font;
+    let n = CODE_LEN;
     let (w, h, gap) = (26.0, 30.0, 6.0);
     let total = n as f32 * w + (n - 1) as f32 * gap;
     let x0 = (cx - total / 2.0).round();

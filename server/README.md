@@ -14,7 +14,7 @@ every change, and runs one alarm per room for turn timeouts and clean-up.
 
 | route | what |
 |---|---|
-| `GET /create?target=10&stick=1` | WebSocket: open a new room (random 5-letter code) with those rules |
+| `GET /create?target=10&stick=1` | WebSocket: open a new room (random 6-letter code) with those rules |
 | `GET /join/{CODE}` | WebSocket: join or rejoin a room. The code is the invitation |
 | `GET /knock/{HANDLE}` | WebSocket: ask to join a room by its handle |
 | `GET /` | a plain-text hello |
@@ -112,7 +112,7 @@ covers a great deal. What keeps it cheap:
   refuse other versions with a polite "please update" error.
 - Changing `RoomSnapshot` breaks rooms that are live during a deploy. They only last an hour or so
   anyway, but prefer adding `#[serde(default)]` fields.
-- Room codes use 24 letters (no I or O), so there are about 8 million. Joining a code that isn't a
+- Room codes use 24 letters (no I or O), so there are about 190 million. Joining a code that isn't a
   live room gets `NoSuchRoom` over the socket. The [rate limiting
   binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) only slows a
   guesser down a little (see "Limits and clean-up"); a strict limit would need a Durable Object.

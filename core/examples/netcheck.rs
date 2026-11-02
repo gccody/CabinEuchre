@@ -282,7 +282,7 @@ fn main() {
     }
 
     // A code nobody has: refused politely, over the socket.
-    let mut bogus = connect(&format!("{server}/join/ZZZZZ"));
+    let mut bogus = connect(&format!("{server}/join/ZZZZZZ"));
     send(&mut bogus, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: "lost".into(), token: None });
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
