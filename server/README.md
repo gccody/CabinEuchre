@@ -38,9 +38,12 @@ waiting is let in. `Seats` carries `public` and `host` so every player's lobby s
 
 ### Limits and clean-up
 
-New connections are limited to 60 a minute per address (`[[ratelimits]]` in `wrangler.toml`), so
-short room codes can't be guessed quickly. If the limiter itself fails, players are let in. A table
-holds at most 8 waiting requests to join.
+New connections go through a rate limiting binding set to 60 a minute per address (`[[ratelimits]]` in
+`wrangler.toml`). Cloudflare counts approximately, so it only stops heavy bursts: on the live server,
+about 190 connections a minute from one address were never refused, and a burst of 400 in 2 seconds
+started being refused around number 337. `wrangler dev` enforces the number exactly, so a local test
+says nothing about this. If the limiter itself fails, players are let in and the failure is logged. A
+table holds at most 8 waiting requests to join.
 
 The room's one alarm covers everything that happens with nobody sending a message: a bot moves for a
 player who runs out of time (60 s a turn, 15 s after a drop), a person away for 10 minutes loses the
@@ -110,6 +113,6 @@ covers a great deal. What keeps it cheap:
 - Changing `RoomSnapshot` breaks rooms that are live during a deploy. They only last an hour or so
   anyway, but prefer adding `#[serde(default)]` fields.
 - Room codes use 24 letters (no I or O), so there are about 8 million. Joining a code that isn't a
-  live room gets `NoSuchRoom` over the socket. For extra protection, a [rate limiting
-  binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) on
-  `/join` would slow down anyone guessing codes.
+  live room gets `NoSuchRoom` over the socket. The [rate limiting
+  binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) only slows a
+  guesser down a little (see "Limits and clean-up"); a strict limit would need a Durable Object.

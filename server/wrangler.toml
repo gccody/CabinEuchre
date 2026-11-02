@@ -15,7 +15,8 @@ class_name = "EuchreRoom"
 tag = "v1"
 new_sqlite_classes = ["EuchreRoom"]
 
-# New connections per address, per minute (see `allowed` in src/lib.rs).
+# New connections per address, per minute (see `allowed` in src/lib.rs). Cloudflare counts
+# approximately, so this stops heavy bursts rather than holding to exactly this number.
 [[ratelimits]]
 name = "CONNECTS"
 namespace_id = "1001"

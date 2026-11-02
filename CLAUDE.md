@@ -155,9 +155,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - Timing lives in `core/src/room.rs`, as pure code over times the server passes in. `TurnClock`: 60 s
   a turn, 15 s from a drop, at least 15 s after coming back, and never past 120 s. A person away for
   10 minutes (`AWAY_SEAT_MS`) loses the seat to a bot. A timed-out player sees "Out of time!".
-- Connections are limited to 60 a minute per address (`[[ratelimits]]` in `server/wrangler.toml`,
-  `allowed` in the server), so short room codes can't be guessed quickly. Requests to join at one
-  table are capped at `MAX_KNOCKS`.
+- New connections pass a rate limit set to 60 a minute per address (`[[ratelimits]]` in
+  `server/wrangler.toml`, `allowed` in the server). Cloudflare counts approximately, so live it only
+  stops heavy bursts (about 190 a minute got through), and `wrangler dev` is exact, so test it live. Requests to join at
+  one table are capped at `MAX_KNOCKS`.
 - Closing the game on purpose sends `Leave`. Being killed doesn't, so the seat stays for a while,
   and PLAY ONLINE offers REJOIN TABLE. Typing the same code again finds the same seat too.
 - Online tables differ only a little: the result banner moves on by itself after 7 s, PLAY AGAIN

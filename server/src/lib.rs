@@ -85,9 +85,19 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 /// asking to join shouldn't be free to flood. If the limiter itself fails, let
 /// the player in: a game that works beats a perfect limit.
 async fn allowed(req: &Request, env: &Env) -> bool {
-    let Ok(limiter) = env.rate_limiter("CONNECTS") else { return true };
     let address = req.headers().get("CF-Connecting-IP").ok().flatten().unwrap_or_else(|| "local".into());
-    limiter.limit(address).await.map_or(true, |outcome| outcome.success)
+    let outcome = match env.rate_limiter("CONNECTS") {
+        Ok(limiter) => limiter.limit(address).await,
+        Err(error) => Err(error),
+    };
+    // Players come first if the limiter itself breaks, but say so: it looks just like no limit.
+    outcome.map_or_else(
+        |error| {
+            console_error!("rate limiter failed: {error}");
+            true
+        },
+        |outcome| outcome.success,
+    )
 }
 
 /// The same upgrade request, aimed at a room.
