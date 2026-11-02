@@ -3,6 +3,7 @@
 use love2drs::prelude::*;
 
 use crate::cards::Pose;
+use crate::device;
 use crate::euchre::{Card, Rank, Suit};
 use crate::juice::{self, Spring};
 use crate::palette;
@@ -12,6 +13,24 @@ use crate::text::{LINE_HEIGHT, Text};
 use crate::ui::{self, Button, Rect};
 
 const PANEL: Rect = Rect::new(120.0, 34.0, 400.0, 292.0);
+/// On a phone the panel fills the screen, so the pages need fewer lines.
+const MOBILE_PANEL: Rect = Rect::new(14.0, 8.0, 612.0, 344.0);
+
+fn panel() -> Rect {
+    if device::mobile() { MOBILE_PANEL } else { PANEL }
+}
+
+/// The controls page on a phone: there are no keys to mention.
+const MOBILE_CONTROLS: &str = "Tap a card to play it. Or slide your finger along your hand to look the cards over, \
+    and lift it to play.\n\n\
+    Bid with the buttons above your hand. To go alone, tap ALONE first, then order up or name a suit.\n\n\
+    MENU pauses the game. Your game is saved when you leave the app.\n\n\
+    Change speed, volume and house rules in Options.";
+
+/// A page's text for this device.
+fn page_body(page: &Page) -> &'static str {
+    if device::mobile() && page.title == "CONTROLS" { MOBILE_CONTROLS } else { page.body }
+}
 
 struct Page {
     title: &'static str,
@@ -111,11 +130,25 @@ impl RulesPanel {
         let y = PANEL.y + PANEL.h - 22.0;
         let mut pop = Spring::new(0.9);
         pop.target = 1.0;
+        let (prev, next, close) = if device::mobile() {
+            let (p, y) = (MOBILE_PANEL, MOBILE_PANEL.y + MOBILE_PANEL.h - 30.0);
+            (
+                Button::grey("<", Rect::centered(p.x + 56.0, y, 76.0, 40.0)).scaled(1.5),
+                Button::blue(">", Rect::centered(p.x + p.w - 56.0, y, 76.0, 40.0)).scaled(1.5),
+                Button::brass("CLOSE", Rect::centered(p.center().x, y, 150.0, 40.0)).scaled(1.5),
+            )
+        } else {
+            (
+                Button::grey("<", Rect::centered(PANEL.x + 30.0, y, 30.0, 18.0)),
+                Button::blue(">", Rect::centered(PANEL.x + PANEL.w - 30.0, y, 30.0, 18.0)),
+                Button::brass("CLOSE", Rect::centered(PANEL.center().x, y, 76.0, 18.0)),
+            )
+        };
         RulesPanel {
             page: 0,
-            prev: Button::grey("<", Rect::centered(PANEL.x + 30.0, y, 30.0, 18.0)),
-            next: Button::blue(">", Rect::centered(PANEL.x + PANEL.w - 30.0, y, 30.0, 18.0)),
-            close: Button::brass("CLOSE", Rect::centered(PANEL.center().x, y, 76.0, 18.0)),
+            prev,
+            next,
+            close,
             pop,
             page_pop: Spring::new(1.0),
         }
@@ -206,26 +239,28 @@ impl RulesPanel {
         let page = &PAGES[self.page];
         ui::dim_screen(g, 0.55);
         g.push();
-        let c = PANEL.center();
+        let panel = panel();
+        let c = panel.center();
         g.translate(c.x, c.y);
         g.scale(self.pop.value, self.pop.value);
         g.translate(-c.x, -c.y);
 
-        ui::panel(g, PANEL, palette::PANEL);
-        Text::new("HOW TO PLAY", c.x, PANEL.y + 12.0)
+        ui::panel(g, panel, palette::PANEL);
+        Text::new("HOW TO PLAY", c.x, panel.y + 12.0)
             .color(palette::MUTED)
             .center()
             .draw(g, font);
         let s = self.page_pop.value;
-        Text::new(page.title, c.x, PANEL.y + 30.0)
+        Text::new(page.title, c.x, panel.y + 30.0)
             .scale(2.0 * s)
             .color(palette::GOLD)
             .center()
             .draw(g, font);
 
-        let body = Rect::new(PANEL.x + 12.0, PANEL.y + 46.0, PANEL.w - 24.0, PANEL.h - 80.0);
+        let footer = if device::mobile() { 104.0 } else { 80.0 };
+        let body = Rect::new(panel.x + 12.0, panel.y + 46.0, panel.w - 24.0, panel.h - footer);
         ui::inset(g, body, palette::PANEL_DARK);
-        let lines = font.wrap(page.body, body.w - 20.0);
+        let lines = font.wrap(page_body(page), body.w - 20.0);
         for (i, line) in lines.iter().enumerate() {
             Text::new(line, body.x + 10.0, body.y + 9.0 + i as f32 * LINE_HEIGHT).draw(g, font);
         }
@@ -246,7 +281,12 @@ impl RulesPanel {
             Text::new(caption, x, y + 39.0).color(palette::BRASS_LIGHT).center().draw(g, font);
         }
 
-        Text::new(&format!("{} / {}", self.page + 1, PAGES.len()), PANEL.x + 72.0, PANEL.y + PANEL.h - 22.0)
+        let (count_x, count_y) = if device::mobile() {
+            (panel.x + 106.0, panel.y + panel.h - 30.0)
+        } else {
+            (panel.x + 72.0, panel.y + panel.h - 22.0)
+        };
+        Text::new(&format!("{} / {}", self.page + 1, PAGES.len()), count_x, count_y)
             .color(palette::MUTED)
             .anchor(0.0, 0.5)
             .draw(g, font);

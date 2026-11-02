@@ -8,7 +8,8 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
 game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted) and
-an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad.
+an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
+macOS and Linux, and on Android and iOS phones and tablets (see "Phones and tablets").
 
 **Online play** (cross-platform): host a table or join one with a 5-letter code; bots fill empty
 seats. Rooms run on a Cloudflare Worker with one Durable Object per table (`server/`). Steam builds
@@ -30,6 +31,9 @@ cargo clippy --all-targets     # keep it warning-free (also with --features stea
 cd server && npx wrangler dev  # the room server on ws://127.0.0.1:8787 (see server/README.md)
 cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3   # play a game against it
 LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   # render one frame to PNG and exit
+cargo love2drs android run -p euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
+cargo love2drs ios build -p euchre                  # on a Mac: builds the .app for the simulator
+EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,24 cargo run   # preview the phone layouts on the desktop
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
@@ -52,6 +56,13 @@ the monitor's refresh rate.
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
 | `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file and the saved game, so screenshots don't depend on the player's options or a game they left |
+| `EUCHRE_MOBILE=1` | use the phone and tablet layouts on the desktop (read from the environment only) |
+| `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |
+| `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units) |
+
+Nothing can set environment variables on a phone, so debug builds there also read `KEY=value` lines
+from `euchre-debug.txt` in the save directory (Android: `files/`, via `adb shell run-as`; iOS: the app
+container's `Documents/`). The lobby's `[euchre] seated at table` line goes to logcat on Android.
 
 Example: `EUCHRE_FIXED_DT=1 EUCHRE_SCENE=table EUCHRE_SEED=15 EUCHRE_AUTOPLAY=1 LOVE2DRS_SCREENSHOT=target/shots/bid.png LOVE2DRS_SCREENSHOT_FRAME=340 cargo run`
 shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you discard as dealer,
@@ -63,6 +74,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 |---|---|
 | `src/main.rs` | window config, `love2drs::run` |
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
+| `src/device.rs` | `mobile()`, which every phone and tablet branch goes through (always false on a desktop unless previewing), and `var()` for debug switches |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
 | `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
@@ -163,6 +175,32 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   actually moves calls `shared.tick()`, and the deal uses `riffle()`, `gather_slide()` and
   `deal_flick()`. Refused presses don't rumble.
 
+### Phones and tablets
+
+- **Same game, own layouts.** Every mobile difference sits behind `device::mobile()`, which is false on
+  a desktop, so the PC game doesn't change. Packaging is `[package.metadata.love2drs]` in `Cargo.toml`.
+- **Check the PC build after touching shared code.** Render the same deterministic screenshots
+  (`EUCHRE_DEFAULT_SETTINGS=1 EUCHRE_FIXED_DT=1 EUCHRE_SEED=n`) from before and after and compare them
+  pixel by pixel. It catches what the eye won't: `background.wgsl` keeps literal numbers for the exact
+  640x360 view, because the mat's edges land exactly on their thresholds and computing them from a
+  uniform moved the right-hand stitches by a texel.
+- **View.** On mobile the 640x360 design space is scaled to fit the safe area, and the canvas covers the
+  whole screen, so the tabletop runs full-bleed behind the notch and the bars. `render::bounds()` is the
+  safe area in design coordinates. It can reach outside 640x360, so edge-anchored things (hand, MENU,
+  score pad, trump medallion) use it. Anything drawn across the whole screen, like `ui::dim_screen`, has
+  to cover more than 640x360 too.
+- **Margins only grow** while the window keeps its size, and Android starts with a 24 dp bottom floor:
+  its gesture bar appears after the first touch, and the table must not jump when it does.
+- **Touch targets** are about 40 design px tall plus `ui::TOUCH_SLOP`. One design px is roughly one dp.
+- **Lifecycle.** `Scene::background` runs when the app is sent away: offline games save, and online games
+  keep their seat (the room's disconnect timer applies). Android's back gesture arrives as `Key::Escape`;
+  it pauses in a game, closes panels and leaves from the title. iOS has no back, and never quits itself.
+- **No quit or fullscreen on mobile:** the title has no QUIT button and Options has no Fullscreen row.
+- **Shipping builds need `EUCHRE_SERVER` set at build time.** The default is `ws://127.0.0.1:8787`, and
+  a phone has no room server on localhost.
+- Emulator notes: the Android emulator needs a GPU mode that gives Vulkan (an AVD with `hw.gpu.enabled=no`
+  crashes at startup on GLES). To reach a local `wrangler dev`, use `adb reverse tcp:8787 tcp:8787`.
+
 ### Rules of the road
 
 - **Design space.** Scenes draw in a fixed 640x360 coordinate space and receive mouse positions
@@ -217,7 +255,6 @@ other game's) sprites, shaders, sounds or other files.
 
 - Public quick-match (an extra Durable Object as a queue), once enough people play online.
 - Verified identities (Steam auth tickets checked by the server) if rankings ever matter.
-- Android/iOS packaging in love2drs (winit and wgpu support both); the game side is ready.
 
 - Smarter AI (card counting for voids, better lone-hand judgment), difficulty levels.
 - Optional house rules: defending alone, "farmer's hand", no-trump.

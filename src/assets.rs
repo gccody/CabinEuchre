@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 
 /// Finds `relative` (e.g. `"assets/music/theme.ogg"`), or `None` if it doesn't exist.
 pub fn find(relative: &str) -> Option<PathBuf> {
+    // Phones keep assets inside the app package, where `is_file` can't see
+    // them. The loaders look there for the same relative path.
+    if crate::device::NATIVE_MOBILE {
+        return Some(PathBuf::from(relative));
+    }
     let candidates = [
         Some(PathBuf::from(relative)),
         Some(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)),

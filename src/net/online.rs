@@ -25,8 +25,7 @@ pub const DEFAULT_SERVER: &str = "ws://127.0.0.1:8787";
 
 /// The room server's base URL (`ws://` or `wss://`, no trailing slash).
 pub fn server_url() -> String {
-    std::env::var("EUCHRE_SERVER")
-        .ok()
+    crate::device::var("EUCHRE_SERVER")
         .or(option_env!("EUCHRE_SERVER").map(str::to_string))
         .unwrap_or_else(|| DEFAULT_SERVER.to_string())
         .trim_end_matches('/')

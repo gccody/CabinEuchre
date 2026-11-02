@@ -16,10 +16,12 @@
 //! - `assets`   asset path resolution
 //! - `net`      where moves go: an in-process room (offline) or the online server
 //! - `platform` Steam (optional feature): names, invites, rich presence, join requests
+//! - `device`   phone or tablet? Picks the mobile layouts, and debug switches
 
 mod app;
 mod assets;
 mod cards;
+mod device;
 use euchre_core as euchre;
 mod juice;
 mod net;
@@ -38,9 +40,17 @@ mod ui;
 use love2drs::Conf;
 
 fn main() -> love2drs::Result {
+    // Debug: `EUCHRE_WINDOW=1200x540` sizes the window like a phone, to preview
+    // the mobile layouts on a desktop (with `EUCHRE_MOBILE=1`).
+    let (w, h) = std::env::var("EUCHRE_WINDOW")
+        .ok()
+        .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+        .unwrap_or((1280, 720));
     let conf = Conf::new("Euchre")
-        .size(1280, 720)
+        .size(w, h)
         .resizable(true)
         .min_size(render::VIEW_W, render::VIEW_H);
     love2drs::run(conf, app::App::new)
 }
+
+love2drs::android_main!(main);

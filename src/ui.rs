@@ -4,6 +4,7 @@
 
 use love2drs::prelude::*;
 
+use crate::device;
 use crate::juice::Spring;
 use crate::render::DENSITY;
 use crate::palette;
@@ -35,7 +36,15 @@ impl Rect {
     pub fn center(&self) -> Vec2 {
         vec2(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }
+
+    /// This rect grown by `by` on every side.
+    pub fn grown(&self, by: f32) -> Rect {
+        Rect::new(self.x - by, self.y - by, self.w + by * 2.0, self.h + by * 2.0)
+    }
 }
+
+/// How far past its edges a button answers a finger.
+const TOUCH_SLOP: f32 = 4.0;
 
 /// A rectangle with its corners cut at 45 degrees (`cut` design px). Convex,
 /// so it fills as a single polygon. The house shape for panels and buttons.
@@ -87,7 +96,12 @@ pub fn inset(g: &mut Graphics, r: Rect, fill: Color) {
 /// Full-screen dim behind modal panels.
 pub fn dim_screen(g: &mut Graphics, alpha: f32) {
     g.set_color(palette::INK.with_alpha(alpha));
-    g.rectangle(Fill, -20.0, -20.0, 700.0, 400.0);
+    if device::mobile() {
+        // The canvas can reach well past 640x360 on a phone.
+        g.rectangle(Fill, -2000.0, -2000.0, 4640.0, 4360.0);
+    } else {
+        g.rectangle(Fill, -20.0, -20.0, 700.0, 400.0);
+    }
 }
 
 /// Rough perceived brightness, to pick a text shadow that suits a fill.
@@ -169,9 +183,14 @@ impl Button {
         self
     }
 
+    /// The area that answers presses: on a phone, a little more than what's drawn.
+    fn hit(&self) -> Rect {
+        if device::mobile() { self.rect.grown(TOUCH_SLOP) } else { self.rect }
+    }
+
     /// Call every frame. Plays a soft tick when the mouse (or the focus) first arrives.
     pub fn update(&mut self, mouse: Vec2, dt: f32, sfx: &Sfx) {
-        let over = self.rect.contains(mouse) || self.focused;
+        let over = self.hit().contains(mouse) || self.focused;
         if over && !self.hovered && self.enabled {
             sfx.play(Sound::Hover);
         }
@@ -203,7 +222,7 @@ impl Button {
 
     /// Returns true if a press at `pos` activates the button (and plays the feedback).
     pub fn click(&mut self, pos: Vec2, sfx: &Sfx) -> bool {
-        if !self.rect.contains(pos) {
+        if !self.hit().contains(pos) {
             return false;
         }
         if !self.enabled {
@@ -328,6 +347,10 @@ impl Slider {
 
     /// The area that accepts clicks: the track plus some slack for the knob.
     fn hit(&self) -> Rect {
+        if device::mobile() {
+            // Most of the row's height, so a thumb can't miss it.
+            return Rect::new(self.rect.x - 10.0, self.rect.y - 16.0, self.rect.w + 20.0, self.rect.h + 32.0);
+        }
         Rect::new(self.rect.x - 6.0, self.rect.y - 6.0, self.rect.w + 12.0, self.rect.h + 12.0)
     }
 
@@ -404,7 +427,8 @@ impl Slider {
         }
         // Brass fader knob with a center groove.
         let (kx, ky) = (r.x + fill_w, r.y + r.h / 2.0);
-        let (kw, kh) = (8.0 * self.knob.value, 14.0 * self.knob.value);
+        let knob = if device::mobile() { 1.5 } else { 1.0 };
+        let (kw, kh) = (8.0 * knob * self.knob.value, 14.0 * knob * self.knob.value);
         let (x, y) = (kx - kw / 2.0, ky - kh / 2.0);
         g.set_color(palette::INK.with_alpha(0.5));
         chamfer(g, Fill, x + 1.0, y + 2.0, kw, kh, 2.0);

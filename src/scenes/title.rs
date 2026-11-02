@@ -10,6 +10,7 @@ use std::f32::consts::PI;
 use love2drs::prelude::*;
 
 use crate::cards::Pose;
+use crate::device;
 use crate::euchre::{Card, Match, Rank, Suit};
 use crate::juice::{self, Spring};
 use crate::palette;
@@ -72,6 +73,39 @@ const SUMMARY_GAP: f32 = 6.0;
 /// How far a plaque's lip and drop shadow reach below its rect.
 const PLAQUE_BELOW: f32 = 4.0;
 
+/// Where the jacks, logo and tagline sit: `(center x, fan y, logo y, tagline y)`.
+/// On a phone they take the left of the screen, beside a column of big plaques.
+fn header(lift: f32) -> (f32, f32, f32, f32) {
+    if device::mobile() {
+        (184.0, 118.0, 222.0, 262.0)
+    } else {
+        (CX, 80.0 - lift, 150.0 - lift, 186.0 - lift)
+    }
+}
+
+/// The phone's menu: a column of plaques a thumb can't miss. There's no QUIT:
+/// Android's back gesture quits, and iOS apps don't.
+fn mobile_buttons(saved: bool) -> Vec<(Choice, Button)> {
+    let (x, w, h) = (470.0, 236.0, 42.0);
+    let row = |y: f32| Rect::centered(x, y, w, h);
+    if saved {
+        vec![
+            (Choice::Continue, Button::brass("CONTINUE", Rect::centered(x, 71.0, w, 50.0)).scaled(2.0)),
+            (Choice::Play, Button::red("NEW GAME", row(143.0)).scaled(1.5)),
+            (Choice::Online, online_button(row(194.0)).scaled(1.5)),
+            (Choice::Rules, Button::green("HOW TO PLAY", row(245.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", row(296.0)).scaled(1.5)),
+        ]
+    } else {
+        vec![
+            (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(x, 99.0, w, 52.0)).scaled(2.0)),
+            (Choice::Online, online_button(row(158.0)).scaled(1.5)),
+            (Choice::Rules, Button::green("HOW TO PLAY", row(212.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", row(266.0)).scaled(1.5)),
+        ]
+    }
+}
+
 /// The line under CONTINUE: the saved game's score.
 fn saved_summary(m: &Match) -> String {
     format!("WE {} · THEY {} · PLAYING TO {}", m.scores[0], m.scores[1], m.target)
@@ -93,13 +127,14 @@ impl Title {
     pub fn new() -> Self {
         let saved = savegame::load();
         let lift = if saved.is_some() { SAVED_LIFT } else { LIFT };
+        let (head_x, fan_y, _, _) = header(lift);
         let jacks = [Suit::Clubs, Suit::Diamonds, Suit::Spades, Suit::Hearts];
         let cards = jacks
             .iter()
             .enumerate()
             .map(|(i, &suit)| {
                 let k = i as f32 - 1.5;
-                let home = vec2(CX + k * 40.0, 80.0 + k * k * 4.0 - lift);
+                let home = vec2(head_x + k * 40.0, fan_y + k * k * 4.0);
                 let angle = k * 0.14;
                 // Cards start below the screen and fly up, staggered.
                 let mut y = card_spring(VIEW_H as f32 + 60.0 + i as f32 * 40.0);
@@ -122,7 +157,9 @@ impl Title {
         let letters = (0..TITLE.len()).map(|_| Spring::new(0.0)).collect();
         // A single column of plaques under the logo.
         let w = 112.0;
-        let buttons = if saved.is_some() {
+        let buttons = if device::mobile() {
+            mobile_buttons(saved.is_some())
+        } else if saved.is_some() {
             // CONTINUE, its score line (SUMMARY_GAP below the plaque's lip and
             // shadow, and the same gap above NEW GAME), then the usual 24 px pitch.
             vec![
@@ -256,8 +293,9 @@ impl Scene for Title {
         let depth = 4;
         let widths: Vec<f32> = TITLE.chars().map(|ch| font.width(&ch.to_string()) + 2.0).collect();
         let total = (widths.iter().sum::<f32>() - 2.0) * scale;
-        let mut x = CX - total / 2.0;
-        let cy = 150.0 - self.lift;
+        let (head_x, _, logo_y, tag_y) = header(self.lift);
+        let mut x = head_x - total / 2.0;
+        let cy = logo_y;
         for (i, ch) in TITLE.chars().enumerate() {
             let s = ch.to_string();
             let w = widths[i] * scale;
@@ -285,7 +323,7 @@ impl Scene for Title {
             }
             x += w;
         }
-        Text::new("♣  A TRICK-TAKING CARD GAME  ♥", CX, 186.0 - self.lift)
+        Text::new("♣  A TRICK-TAKING CARD GAME  ♥", head_x, tag_y)
             .color(palette::BRASS_LIGHT)
             .center()
             .draw(g, font);
@@ -295,7 +333,7 @@ impl Scene for Title {
         }
         if let (Some(m), Some((_, b))) = (&self.saved, self.buttons.first()) {
             // Top-anchored, so the gap is measured from the plaque's real bottom edge.
-            Text::new(&saved_summary(m), CX, b.rect.y + b.rect.h + PLAQUE_BELOW + SUMMARY_GAP)
+            Text::new(&saved_summary(m), b.rect.center().x, b.rect.y + b.rect.h + PLAQUE_BELOW + SUMMARY_GAP)
                 .color(palette::MUTED)
                 .anchor(0.5, 0.0)
                 .draw(g, font);
@@ -308,9 +346,19 @@ impl Scene for Title {
         };
         let footer = match shared.input {
             InputMode::Touch => "",
+            // A phone: no quit button, and no function keys to mention.
+            _ if device::mobile() => shared.hint("D-pad: Choose   A: Select", ""),
             _ => shared.hint(pad, "F2: Lamplight   F11: Fullscreen   Esc: Quit"),
         };
-        Text::new(footer, 6.0, VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
+        if device::mobile() {
+            // Inside the mat's stitching, and only when no panel is open.
+            if self.overlay.is_none() {
+                let b = crate::render::bounds();
+                Text::new(footer, b.x + 34.0, b.y + b.h - 34.0).color(palette::MUTED).draw(g, font);
+            }
+        } else {
+            Text::new(footer, 6.0, VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
+        }
 
         if let Some(o) = &self.overlay {
             o.draw(shared, g);
@@ -325,7 +373,7 @@ impl Scene for Title {
             return Transition::None;
         }
         match key {
-            Key::Escape => Transition::Quit,
+            Key::Escape if device::back_quits() => Transition::Quit,
             Key::Enter | Key::Space => {
                 self.buttons[0].1.flash(&shared.sfx);
                 self.choose(shared, Choice::Play)
@@ -348,7 +396,7 @@ impl Scene for Title {
                 shared.tick();
             }
             // B jumps to QUIT rather than quitting outright.
-            Nav::Back if self.focus != self.buttons.len() - 1 => {
+            Nav::Back if !device::mobile() && self.focus != self.buttons.len() - 1 => {
                 self.focus = self.buttons.len() - 1;
                 shared.tick();
             }

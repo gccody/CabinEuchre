@@ -4,6 +4,9 @@
 //! The table is centered on the felt. The score pad sits in the top-left
 //! corner, the trump medallion in the top-right, so the side seats keep their
 //! won tricks and kitty below their name plates.
+//!
+//! On a phone the seats follow the edges of the safe area ([`render::bounds`]),
+//! your hand is bigger, and the bidding buttons get more room above it.
 
 use std::cmp::Reverse;
 use std::f32::consts::PI;
@@ -12,7 +15,9 @@ use love2drs::prelude::*;
 
 use super::{HUMAN, Place, Prompt, Table};
 use crate::cards::{CARD_H, CARD_W};
+use crate::device;
 use crate::euchre::{Card, Seat, Suit};
+use crate::render;
 use crate::scene::NO_POINTER;
 
 /// Center of the playing area (the pile and the trick).
@@ -21,7 +26,25 @@ pub const CENTER: Vec2 = Vec2::new(320.0, 152.0);
 pub const PROMPT_Y: f32 = 232.0;
 
 const HUMAN_SCALE: f32 = 1.0;
+/// Your cards on a phone: big enough to read, and to hit with a finger.
+const MOBILE_HUMAN_SCALE: f32 = 1.3;
 const OTHER_SCALE: f32 = 0.78;
+
+/// The prompt's baseline. On a phone the bidding buttons need the space under
+/// the pile, and there are no trick cards in the way until the bidding is over.
+pub fn prompt_y(bidding: bool) -> f32 {
+    match (device::mobile(), bidding) {
+        (false, _) => PROMPT_Y,
+        (true, true) => 196.0,
+        (true, false) => 240.0,
+    }
+}
+
+/// The phone's table: x of the west and east seats, and the top and bottom of the safe area.
+fn mobile_edges() -> (f32, f32, f32, f32) {
+    let b = render::bounds();
+    (b.x + 62.0, b.x + b.w - 62.0, b.y, b.y + b.h)
+}
 
 /// Where a card wants to be this frame.
 #[derive(Debug, Clone, Copy)]
@@ -41,27 +64,52 @@ pub fn seat_angle(seat: Seat) -> f32 {
 }
 
 pub fn hand_anchor(seat: Seat) -> Vec2 {
+    if device::mobile() {
+        let (west, east, top, bottom) = mobile_edges();
+        return [vec2(320.0, bottom - 44.0), vec2(west, 156.0), vec2(320.0, top + 20.0), vec2(east, 156.0)][seat];
+    }
     [vec2(320.0, 314.0), vec2(98.0, 156.0), vec2(320.0, 20.0), vec2(542.0, 156.0)][seat]
 }
 
 /// Center of each player's name plate.
 pub fn plate_pos(seat: Seat) -> Vec2 {
+    if device::mobile() {
+        let (west, east, top, bottom) = mobile_edges();
+        return [vec2(118.0, bottom - 20.0), vec2(west, 228.0), vec2(425.0, top + 16.0), vec2(east, 228.0)][seat];
+    }
     [vec2(170.0, 336.0), vec2(98.0, 228.0), vec2(425.0, 16.0), vec2(542.0, 228.0)][seat]
 }
 
 /// Where each seat stacks the tricks it wins.
 pub fn won_spot(seat: Seat) -> Vec2 {
+    if device::mobile() {
+        let (west, east, top, bottom) = mobile_edges();
+        return [vec2(510.0, bottom - 38.0), vec2(west, 270.0), vec2(215.0, top + 20.0), vec2(east, 270.0)][seat];
+    }
     [vec2(457.0, 322.0), vec2(98.0, 270.0), vec2(215.0, 20.0), vec2(542.0, 270.0)][seat]
 }
 
 /// Where the kitty goes once trump is set (beside the dealer).
 pub fn kitty_spot(seat: Seat) -> Vec2 {
+    if device::mobile() {
+        let (west, east, top, bottom) = mobile_edges();
+        return [vec2(118.0, bottom - 56.0), vec2(west, 318.0), vec2(522.0, top + 30.0), vec2(east, 318.0)][seat];
+    }
     [vec2(170.0, 304.0), vec2(98.0, 318.0), vec2(522.0, 30.0), vec2(542.0, 318.0)][seat]
 }
 
 /// Anchor for speech bubbles, plus which part of the bubble sits on it
 /// (0 = left edge, 0.5 = center, 1 = right edge) so side bubbles grow toward the table.
 pub fn bubble_pos(seat: Seat) -> (Vec2, f32) {
+    if device::mobile() {
+        let (west, east, top, bottom) = mobile_edges();
+        return [
+            (vec2(118.0, bottom - 40.0), 0.5),
+            (vec2(west + 32.0, 120.0), 0.0),
+            (vec2(420.0, top + 56.0), 0.5),
+            (vec2(east - 32.0, 120.0), 1.0),
+        ][seat];
+    }
     [
         (vec2(170.0, 314.0), 0.5),
         (vec2(130.0, 120.0), 0.0),
@@ -116,12 +164,18 @@ pub fn hand_cards(t: &Table, seat: Seat) -> Vec<Card> {
 /// Resting slot of card `i` of `n` in `seat`'s fan.
 fn hand_slot(seat: Seat, i: usize, n: usize) -> (Vec2, f32, f32) {
     let human = seat == HUMAN;
+    let k = i as f32 - (n as f32 - 1.0) / 2.0;
+    if human && device::mobile() {
+        // Spread out, so each card shows enough to tap.
+        let spacing = if n == 6 { 44.0 } else { 52.0 };
+        let local = vec2(k * spacing, k * k * 2.2);
+        return (hand_anchor(seat) + local, k * 0.035, MOBILE_HUMAN_SCALE);
+    }
     let spacing = match (human, n) {
         (true, 6) => 31.0,
         (true, _) => 35.0,
         (false, _) => 15.0,
     };
-    let k = i as f32 - (n as f32 - 1.0) / 2.0;
     let local = vec2(k * spacing, k * k * if human { 1.8 } else { 1.2 });
     let rot = k * if human { 0.045 } else { 0.06 };
     let a = seat_angle(seat);
@@ -277,10 +331,13 @@ pub fn card_at(t: &Table, p: Vec2) -> Option<Card> {
     let cards = hand_cards(t, HUMAN);
     let n = cards.len();
     let (hw, hh) = (CARD_W / 2.0, CARD_H / 2.0);
+    // Below the cards there's only the edge of the screen, so on a phone a
+    // finger that's slipped off the bottom still means the card above it.
+    let below = if device::mobile() { 30.0 } else { 0.0 };
     cards.iter().enumerate().rev().find_map(|(i, &card)| {
         let (pos, rot, scale) = hand_slot(HUMAN, i, n);
         let local = rotate(p - pos, -rot) / scale;
         // A little extra reach upward so a lifted card stays hovered.
-        (local.x.abs() <= hw && local.y >= -hh - 10.0 && local.y <= hh).then_some(card)
+        (local.x.abs() <= hw && local.y >= -hh - 10.0 && local.y <= hh + below).then_some(card)
     })
 }

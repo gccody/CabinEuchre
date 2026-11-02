@@ -36,6 +36,7 @@ use std::collections::VecDeque;
 
 use love2drs::prelude::*;
 
+use crate::device;
 use crate::euchre::protocol::{ClientMsg, HandStart, KnockInfo, Move, SeatKind, SeatsInfo, ServerMsg};
 use crate::euchre::{
     Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
@@ -278,8 +279,7 @@ pub struct Table {
 impl Table {
     /// A new game with the current options.
     pub fn new(shared: &Shared) -> Self {
-        let seed = std::env::var("EUCHRE_SEED")
-            .ok()
+        let seed = crate::device::var("EUCHRE_SEED")
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| {
                 std::time::SystemTime::now()
@@ -287,14 +287,13 @@ impl Table {
                     .map(|d| d.as_nanos() as u64)
                     .unwrap_or(1)
             });
-        if std::env::var("EUCHRE_SEED").is_ok() {
+        if crate::device::var("EUCHRE_SEED").is_some() {
             // Deterministic AI think times and shuffles too, for reproducible screenshots.
             love2drs::math::set_random_seed(seed);
         }
         let s = &shared.settings;
         // Debug: `EUCHRE_TARGET=n` overrides the points needed to win.
-        let target = std::env::var("EUCHRE_TARGET")
-            .ok()
+        let target = crate::device::var("EUCHRE_TARGET")
             .and_then(|t| t.parse().ok())
             .unwrap_or(s.target);
         let link = Link::Local(Box::new(LocalTable::new(target, s.stick_the_dealer, seed)));
@@ -412,7 +411,7 @@ impl Table {
             game_over: None,
             pause: None,
             overlay: None,
-            menu_button: Button::grey("MENU", Rect::new(578.0, 332.0, 50.0, 16.0)),
+            menu_button: menu_button_for("MENU"),
             shake: 0.0,
             particles: Vec::new(),
             winner_glow: None,
@@ -421,7 +420,7 @@ impl Table {
             score_pop: [Spring::new(1.0), Spring::new(1.0)],
             trick_pop: [Spring::new(1.0), Spring::new(1.0)],
             trump_pop: Spring::new(1.0),
-            autoplay: std::env::var("EUCHRE_AUTOPLAY").is_ok_and(|v| v == "1"),
+            autoplay: crate::device::var("EUCHRE_AUTOPLAY").is_some_and(|v| v == "1"),
             delay: shared.settings.delay_factor(),
         }
     }
@@ -475,8 +474,7 @@ impl Table {
             "MENU".to_string()
         };
         if self.menu_button.label != label {
-            let w = if label.len() > 4 { 70.0 } else { 50.0 };
-            self.menu_button.rect = Rect::new(628.0 - w, 332.0, w, 16.0);
+            self.menu_button.rect = menu_button_rect(&label);
             self.menu_button.label = label;
             self.menu_button.nudge();
         }
@@ -1086,7 +1084,11 @@ impl Table {
             detail,
             points,
             pop,
-            button: Button::brass(label, Rect::centered(layout::CENTER.x, layout::CENTER.y + 46.0, 96.0, 20.0)),
+            button: if device::mobile() {
+                Button::brass(label, Rect::centered(layout::CENTER.x, layout::CENTER.y + 50.0, 170.0, 38.0)).scaled(1.5)
+            } else {
+                Button::brass(label, Rect::centered(layout::CENTER.x, layout::CENTER.y + 46.0, 96.0, 20.0))
+            },
             age: 0.0,
         });
         let big = result.kind != ResultKind::Made;
@@ -1096,7 +1098,7 @@ impl Table {
         }
         if we_scored {
             shared.sfx.play(if big { Sound::Fanfare } else { Sound::Pop });
-            self.burst(draw::PAD_SCORE_US, if big { 40 } else { 16 });
+            self.burst(draw::pad_score_us(), if big { 40 } else { 16 });
         } else {
             shared.sfx.play(if big { Sound::Womp } else { Sound::Pop });
         }
@@ -1122,8 +1124,16 @@ impl Table {
             self.game_over = Some(GameOver {
                 won,
                 pop,
-                again: Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0)),
-                menu: Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0)),
+                again: if device::mobile() {
+                    Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 68.0, 240.0, 126.0, 38.0)).scaled(1.2)
+                } else {
+                    Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0))
+                },
+                menu: if device::mobile() {
+                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 68.0, 240.0, 126.0, 38.0)).scaled(1.2)
+                } else {
+                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0))
+                },
                 age: 0.0,
                 focus: 0,
             });
@@ -1213,12 +1223,18 @@ impl Table {
         self.alone = false;
         self.bids.clear();
         let mut row: Vec<(Bid, Button)> = Vec::new();
+        let mobile = device::mobile();
+        // Bid buttons: `(width, height, text scale)` on a phone, for fingers.
+        let sized = |w: f32, h: f32, phone: (f32, f32)| {
+            if mobile { Rect::new(0.0, 0.0, phone.0, phone.1) } else { Rect::new(0.0, 0.0, w, h) }
+        };
+        let scale = if mobile { 1.5 } else { 1.0 };
         match wanted {
             Prompt::OrderUp => {
                 let label = if r.dealer == HUMAN { "PICK UP" } else { "ORDER UP" };
-                row.push((Bid::OrderUp, Button::green(label, Rect::new(0.0, 0.0, 70.0, 18.0))));
-                row.push((Bid::Pass, Button::red("PASS", Rect::new(0.0, 0.0, 50.0, 18.0))));
-                row.push((Bid::Alone, Button::grey("ALONE", Rect::new(0.0, 0.0, 52.0, 18.0))));
+                row.push((Bid::OrderUp, Button::green(label, sized(70.0, 18.0, (124.0, 42.0))).scaled(scale)));
+                row.push((Bid::Pass, Button::red("PASS", sized(50.0, 18.0, (84.0, 42.0))).scaled(scale)));
+                row.push((Bid::Alone, Button::grey("ALONE", sized(52.0, 18.0, (96.0, 42.0))).scaled(scale)));
             }
             Prompt::NameTrump => {
                 for suit in Suit::ALL {
@@ -1227,18 +1243,18 @@ impl Table {
                     }
                     let mut b = Button::new(
                         suit.name(),
-                        Rect::new(0.0, 0.0, 28.0, 22.0),
+                        sized(28.0, 22.0, (52.0, 42.0)),
                         palette::CREAM,
                         palette::CREAM_SHADE.lerp(palette::INK, 0.3),
                     );
                     b.text_color = crate::cards::suit_color(suit);
                     b.icon = Some((cards.image().clone(), cards.icon(suit)));
-                    row.push((Bid::Suit(suit), b));
+                    row.push((Bid::Suit(suit), b.scaled(scale)));
                 }
-                let mut pass = Button::red("PASS", Rect::new(0.0, 0.0, 50.0, 18.0));
+                let mut pass = Button::red("PASS", sized(50.0, 18.0, (84.0, 42.0))).scaled(scale);
                 pass.enabled = !(r.dealer == HUMAN && r.stick_the_dealer);
                 row.push((Bid::Pass, pass));
-                row.push((Bid::Alone, Button::grey("ALONE", Rect::new(0.0, 0.0, 52.0, 18.0))));
+                row.push((Bid::Alone, Button::grey("ALONE", sized(52.0, 18.0, (96.0, 42.0))).scaled(scale)));
             }
             _ => {}
         }
@@ -1249,12 +1265,13 @@ impl Table {
             .or_else(|| row.iter().position(|(_, b)| b.enabled))
             .unwrap_or(0);
         // Center the row above the hand.
-        let gap = 6.0;
+        let gap = if mobile { 10.0 } else { 6.0 };
         let total: f32 = row.iter().map(|(_, b)| b.rect.w).sum::<f32>() + gap * (row.len().max(1) - 1) as f32;
         let mut x = (layout::CENTER.x - total / 2.0).round();
         for (_, b) in &mut row {
             b.rect.x = x;
-            b.rect.y = (layout::PROMPT_Y + 21.0 - b.rect.h / 2.0).round();
+            let below_prompt = if mobile { 36.0 } else { 21.0 };
+            b.rect.y = (layout::prompt_y(true) + below_prompt - b.rect.h / 2.0).round();
             x += b.rect.w + gap;
         }
         self.bids = row;
@@ -1329,7 +1346,8 @@ impl Table {
 
     fn pause_buttons(&self) -> Vec<(PauseChoice, Button)> {
         let cx = layout::CENTER.x;
-        let w = 132.0;
+        let mobile = device::mobile();
+        let (w, h) = if mobile { (200.0, 38.0) } else { (132.0, 20.0) };
         // Once the game is over there is nothing left to save. Online games
         // aren't saved: leaving hands your seat to a bot.
         let quit_label = if self.link.is_online() {
@@ -1339,21 +1357,35 @@ impl Table {
         } else {
             "SAVE & QUIT"
         };
-        let mut buttons = vec![(PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 0.0, w, 20.0)))];
+        let mut buttons = vec![(PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 0.0, w, h)))];
         if self.hosting {
             if let Some(k) = self.knocks.first() {
-                buttons.push((PauseChoice::Admit(k.id), Button::green(format!("LET {} IN", k.name), Rect::centered(cx, 0.0, w, 20.0))));
-                buttons.push((PauseChoice::Refuse(k.id), Button::red("SAY NO", Rect::centered(cx, 0.0, w, 20.0))));
+                buttons.push((PauseChoice::Admit(k.id), Button::green(format!("LET {} IN", k.name), Rect::centered(cx, 0.0, w, h))));
+                buttons.push((PauseChoice::Refuse(k.id), Button::red("SAY NO", Rect::centered(cx, 0.0, w, h))));
             }
             let (label, public) = if self.public { ("MAKE PRIVATE", false) } else { ("MAKE PUBLIC", true) };
-            buttons.push((PauseChoice::Public(public), Button::grey(label, Rect::centered(cx, 0.0, w, 20.0))));
+            buttons.push((PauseChoice::Public(public), Button::grey(label, Rect::centered(cx, 0.0, w, h))));
         }
         if self.link.room_code().is_some() && crate::platform::can_invite() {
-            buttons.push((PauseChoice::Invite, Button::new("INVITE FRIENDS", Rect::centered(cx, 0.0, w, 20.0), palette::ORANGE, palette::ORANGE_DARK)));
+            buttons.push((PauseChoice::Invite, Button::new("INVITE FRIENDS", Rect::centered(cx, 0.0, w, h), palette::ORANGE, palette::ORANGE_DARK)));
         }
-        buttons.push((PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 0.0, w, 20.0))));
-        buttons.push((PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 0.0, w, 20.0))));
-        buttons.push((PauseChoice::Quit, Button::red(quit_label, Rect::centered(cx, 0.0, w, 20.0))));
+        buttons.push((PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 0.0, w, h))));
+        buttons.push((PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 0.0, w, h))));
+        buttons.push((PauseChoice::Quit, Button::red(quit_label, Rect::centered(cx, 0.0, w, h))));
+        if mobile {
+            // Tall buttons: one column if they fit, else two side by side.
+            let cols = if buttons.len() > 4 { 2 } else { 1 };
+            let rows = buttons.len().div_ceil(cols);
+            let top = (196.0 - 23.0 * rows as f32).round();
+            for (i, (_, b)) in buttons.iter_mut().enumerate() {
+                b.text_scale = 1.2;
+                b.rect.y = top + (i / cols) as f32 * 46.0;
+                if cols == 2 {
+                    b.rect.x = cx + (i % 2) as f32 * (w + 10.0) - w - 5.0;
+                }
+            }
+            return buttons;
+        }
         // A column centered on the table, 26 px apart.
         let top = 196.0 - 13.0 * buttons.len() as f32;
         for (i, (_, b)) in buttons.iter_mut().enumerate() {
@@ -1514,6 +1546,22 @@ impl Table {
     }
 }
 
+/// The MENU button's place. On a phone it's a big one in the corner of the safe area.
+fn menu_button_rect(label: &str) -> Rect {
+    if device::mobile() {
+        let b = crate::render::bounds();
+        let w = if label.len() > 4 { 96.0 } else { 70.0 };
+        return Rect::new(b.x + b.w - w - 6.0, b.y + b.h - 40.0, w, 36.0);
+    }
+    let w = if label.len() > 4 { 70.0 } else { 50.0 };
+    Rect::new(628.0 - w, 332.0, w, 16.0)
+}
+
+fn menu_button_for(label: &str) -> Button {
+    let b = Button::grey(label, menu_button_rect(label));
+    if device::mobile() { b.scaled(1.2) } else { b }
+}
+
 fn titlecase(name: &str) -> String {
     let mut chars = name.chars();
     match chars.next() {
@@ -1578,6 +1626,10 @@ impl Scene for Table {
             b.focused = focus && open && i == self.bid_focus;
             b.update(mouse, dt, &shared.sfx);
         }
+        if device::mobile() {
+            // Stays in the corner if the safe area changes.
+            self.menu_button.rect = menu_button_rect(&self.menu_button.label);
+        }
         let menu_mouse = if self.pause.is_none() && self.overlay.is_none() { shared.mouse } else { NO_POINTER };
         self.menu_button.update(menu_mouse, dt, &shared.sfx);
 
@@ -1613,6 +1665,13 @@ impl Scene for Table {
 
     fn draw(&mut self, shared: &Shared, g: &mut Graphics) {
         self.draw_table(shared, g);
+    }
+
+    fn background(&mut self, _shared: &mut Shared) {
+        // An online seat stays yours while the connection is down for a while.
+        if !self.link.is_online() {
+            self.save();
+        }
     }
 
     fn suspend(&mut self, _shared: &mut Shared) {

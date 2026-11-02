@@ -8,11 +8,12 @@
 //   data[1..3] = wood dark, wood, wood light
 //   data[4..6] = felt deep, felt, felt glow
 //   data[7]    = lamp tint
+//   data[8]    = the design-space rect the canvas shows (x, y, w, h): 640x360 on
+//                a desktop, the whole screen on a phone
 //
 // Drawn as one full-canvas rectangle, so `uv` is ignored and `screen` is the
 // canvas pixel position.
 
-const DESIGN = vec2<f32>(640.0, 360.0);
 // Texels per design pixel (render::DENSITY).
 const DENSITY = 1.5;
 
@@ -44,20 +45,40 @@ fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, scree
     let felt_glow = uniforms.data[6].rgb;
     let lamp = uniforms.data[7].rgb;
 
+    let view = uniforms.data[8];
+
     // Snap to the pixel-art texel grid so the table is as chunky as the cards.
-    let tex = floor(screen / res * DESIGN * DENSITY);
+    let tex = floor((screen / res * view.zw + view.xy) * DENSITY);
     let p = (tex + vec2<f32>(0.5)) / DENSITY;
-    let dither = bayer4(tex);
+    // On a phone the design space can start left of the canvas. Whole dither
+    // periods keep the grid's indices positive without changing the pattern.
+    let grid = tex + vec2<f32>(4096.0);
+    let dither = bayer4(grid);
 
     // Lamp light: an oval pool that swings a few pixels side to side.
     let lamp_pos = vec2<f32>(320.0 + sin(time * 0.55) * 14.0, 150.0 + (1.0 - cos(time * 1.1)) * 2.0);
     let ld = length((p - lamp_pos) * vec2<f32>(1.0, 1.3));
-    var light = clamp(1.0 - ld / 360.0, 0.0, 1.0);
+    // A wider table gets a wider pool, so its ends don't fall into darkness.
+    let reach = 360.0 * max(max(view.z / 640.0, view.w / 360.0), 1.0);
+    var light = clamp(1.0 - ld / reach, 0.0, 1.0);
     light = light * light * (3.0 - 2.0 * light);
     let level = floor(light * 7.0 + dither) / 7.0;
 
     // The felt mat.
-    let mat = round_rect(p - vec2<f32>(320.0, 180.0), vec2<f32>(306.0, 168.0), 40.0);
+    var mat: f32;
+    var sh: f32;
+    if (all(view == vec4<f32>(0.0, 0.0, 640.0, 360.0))) {
+        // Written out for the exact 640x360 table: the mat's edges and stitches
+        // land exactly on their thresholds here, so a shader compiler's rounding
+        // of computed values would shift them by a texel.
+        mat = round_rect(p - vec2<f32>(320.0, 180.0), vec2<f32>(306.0, 168.0), 40.0);
+        sh = round_rect(p - vec2<f32>(323.0, 185.0), vec2<f32>(306.0, 168.0), 40.0);
+    } else {
+        let mid = view.xy + view.zw * 0.5;
+        let half = view.zw * 0.5 - vec2<f32>(14.0, 12.0);
+        mat = round_rect(p - mid, half, 40.0);
+        sh = round_rect(p - mid - vec2<f32>(3.0, 5.0), half, 40.0);
+    }
 
     var col: vec3<f32>;
     if (mat > 0.0) {
@@ -79,13 +100,12 @@ fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, scree
         }
         col = col * (0.62 + 0.6 * level) * mix(vec3<f32>(1.0), lamp, 0.4 * level);
         // The mat's shadow on the wood (cast down and to the right).
-        let sh = round_rect(p - vec2<f32>(323.0, 185.0), vec2<f32>(306.0, 168.0), 40.0);
         col = col * (1.0 - 0.55 * (1.0 - smoothstep(0.0, 6.0, sh)));
     } else {
         // Felt: lit bands, a faint woven texture and a darker rolled edge.
         col = mix(felt_deep, felt_mid, smoothstep(0.05, 0.55, level));
         col = mix(col, felt_glow, smoothstep(0.6, 1.0, level) * 0.8);
-        let weave = hash(tex) * 0.5 + 0.5 * f32((u32(tex.x) + u32(tex.y)) % 2u);
+        let weave = hash(tex) * 0.5 + 0.5 * f32((u32(grid.x) + u32(grid.y)) % 2u);
         col = col * (0.97 + 0.05 * weave);
         let inside = -mat;
         if (inside < 3.0) {

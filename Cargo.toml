@@ -6,6 +6,15 @@ rust-version = "1.88"
 description = "Euchre on a lamp-lit cabin table, with juicy pixel-art card-game feel."
 publish = false
 
+[package.metadata.love2drs]
+# Android and iOS builds: `cargo love2drs android run -p euchre`.
+app_id = "com.gccody.euchre"
+name = "Euchre"
+orientation = "landscape"
+assets = ["assets/music/theme.ogg"]
+icon = "assets/icon.png"
+permissions = ["android.permission.INTERNET"]
+
 [workspace]
 members = [".", "core"]
 default-members = [".", "core"]

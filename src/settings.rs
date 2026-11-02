@@ -1,5 +1,6 @@
 //! Player settings, persisted as a tiny `key=value` file in the user's config
-//! directory (`%APPDATA%\Euchre` on Windows, `~/.config/euchre` elsewhere).
+//! directory (`%APPDATA%\Euchre` on Windows, `~/.config/euchre` elsewhere, the
+//! app's own folder on phones).
 
 use std::path::PathBuf;
 
@@ -27,6 +28,10 @@ pub struct Settings {
 /// Where the game keeps its files: `%APPDATA%\Euchre` on Windows,
 /// `~/.config/euchre` elsewhere.
 pub fn config_dir() -> Option<PathBuf> {
+    // A phone's app only has its own private folder (and no APPDATA or HOME on Android).
+    if crate::device::NATIVE_MOBILE {
+        return Some(love2drs::filesystem::save_dir());
+    }
     std::env::var_os("APPDATA")
         .map(|p| PathBuf::from(p).join("Euchre"))
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("euchre")))
@@ -73,7 +78,7 @@ impl Settings {
     /// files (settings and the saved game), so screenshots don't depend on the
     /// player's options or a game they left.
     pub fn use_defaults() -> bool {
-        std::env::var("EUCHRE_DEFAULT_SETTINGS").is_ok_and(|v| v == "1")
+        crate::device::var("EUCHRE_DEFAULT_SETTINGS").is_some_and(|v| v == "1")
     }
 
     pub fn load() -> Settings {

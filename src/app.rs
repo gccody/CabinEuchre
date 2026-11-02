@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use love2drs::prelude::*;
 
 use crate::cards::CardArt;
+use crate::device;
 use crate::palette;
 use crate::render::{Renderer, VIEW_H, VIEW_W};
 use crate::scene::{Buzz, InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
@@ -108,9 +109,9 @@ fn direction(v: Vec2) -> Option<Nav> {
 
 impl App {
     pub fn new(ctx: &mut Context) -> Result<Self> {
-        let renderer = Renderer::new(&mut ctx.graphics)?;
+        let renderer = Renderer::new(&mut ctx.graphics, &ctx.window)?;
         let settings = Settings::load();
-        if settings.fullscreen {
+        if settings.fullscreen && !device::mobile() {
             ctx.window.set_fullscreen(true);
         }
         let mut shared = Shared {
@@ -121,18 +122,19 @@ impl App {
             time: 0.0,
             mouse: NO_POINTER,
             mouse_down: false,
-            input: InputMode::Mouse,
+            // A phone has no mouse to wait for, so no mouse-and-keyboard hints.
+            input: if device::mobile() { InputMode::Touch } else { InputMode::Mouse },
             gamepad: ctx.gamepad.is_connected(),
             rumbles: Vec::new(),
         };
         // Debug: `EUCHRE_INPUT=pad|touch` starts as if that device was used last
         // (screenshots of the focus highlight and the pad hints without a controller).
-        match std::env::var("EUCHRE_INPUT").as_deref() {
-            Ok("pad") => {
+        match device::var("EUCHRE_INPUT").as_deref() {
+            Some("pad") => {
                 shared.input = InputMode::Buttons;
                 shared.gamepad = true;
             }
-            Ok("touch") => shared.input = InputMode::Touch,
+            Some("touch") => shared.input = InputMode::Touch,
             _ => {}
         }
         shared.sfx.set_music_volume(shared.settings.music);
@@ -141,19 +143,19 @@ impl App {
         ctx.keyboard.set_key_repeat(true);
         crate::platform::init();
         // Debug: `EUCHRE_SCENE=table|continue|online|options|rules` jumps straight to a screen (for screenshots).
-        let scene: Box<dyn Scene> = match std::env::var("EUCHRE_SCENE").as_deref() {
+        let scene: Box<dyn Scene> = match device::var("EUCHRE_SCENE").as_deref() {
             // Launched from a friend's Steam invite or "Join Game".
             _ if let Some(request) = crate::platform::take_join_request() => Box::new(Lobby::from_request(&shared, request)),
-            Ok("table") => Box::new(Table::new(&shared)),
-            Ok("online") => Box::new(Lobby::new(&shared)),
-            Ok("host") => Box::new(Lobby::host(&shared)),
-            Ok("code") => Box::new(Lobby::entering_code(&shared, "KQJ")),
-            Ok("continue") => match crate::savegame::load() {
+            Some("table") => Box::new(Table::new(&shared)),
+            Some("online") => Box::new(Lobby::new(&shared)),
+            Some("host") => Box::new(Lobby::host(&shared)),
+            Some("code") => Box::new(Lobby::entering_code(&shared, "KQJ")),
+            Some("continue") => match crate::savegame::load() {
                 Some(game) => Box::new(Table::resume(&shared, game)),
                 None => Box::new(Title::new()),
             },
-            Ok("options") => Box::new(Title::with_overlay(Overlay::Options(Box::new(OptionsPanel::new())))),
-            Ok("rules") => Box::new(Title::with_overlay(Overlay::Rules(Box::new(RulesPanel::new())))),
+            Some("options") => Box::new(Title::with_overlay(Overlay::Options(Box::new(OptionsPanel::new())))),
+            Some("rules") => Box::new(Title::with_overlay(Overlay::Rules(Box::new(RulesPanel::new())))),
             _ => Box::new(Title::new()),
         };
         Ok(App {
@@ -171,8 +173,7 @@ impl App {
             pad_active: false,
             pending_buzz: Vec::new(),
             buzzing: (0.0, 0.0, 0.0),
-            fixed_dt: std::env::var("EUCHRE_FIXED_DT")
-                .ok()
+            fixed_dt: device::var("EUCHRE_FIXED_DT")
                 .and_then(|v| v.parse::<f32>().ok())
                 .map(|n| n / 60.0),
         })
@@ -291,7 +292,7 @@ impl App {
         ctx.audio.set_volume(s.volume);
         self.shared.sfx.set_music_volume(s.music);
         self.renderer.atmosphere = s.atmosphere;
-        if ctx.window.is_fullscreen() != s.fullscreen {
+        if !device::mobile() && ctx.window.is_fullscreen() != s.fullscreen {
             ctx.window.set_fullscreen(s.fullscreen);
         }
     }
@@ -304,7 +305,7 @@ impl Game for App {
         self.shared.time += dt;
         self.fade = (self.fade - dt * 3.5).max(0.0);
         self.sync_settings(ctx);
-        self.renderer.update(&ctx.graphics, self.shared.time);
+        self.renderer.update(&ctx.graphics, &ctx.window, self.shared.time);
         self.poll_directions(ctx, real_dt);
         (self.shared.mouse, self.shared.mouse_down) = self.pointer(ctx);
         crate::platform::update();
@@ -328,8 +329,12 @@ impl Game for App {
         self.renderer.frame(&mut ctx.graphics, |g| {
             scene.draw(shared, g);
             if fade > 0.0 {
-                g.set_color(palette::INK.with_alpha(fade));
-                g.rectangle(Fill, 0.0, 0.0, VIEW_W as f32, VIEW_H as f32);
+                if device::mobile() {
+                    crate::ui::dim_screen(g, fade);
+                } else {
+                    g.set_color(palette::INK.with_alpha(fade));
+                    g.rectangle(Fill, 0.0, 0.0, VIEW_W as f32, VIEW_H as f32);
+                }
             }
         });
     }
@@ -469,6 +474,12 @@ impl Game for App {
             }
         };
         self.nav(ctx, nav);
+    }
+
+    fn suspended(&mut self, _ctx: &mut Context) {
+        self.primary_touch = None;
+        self.scene.background(&mut self.shared);
+        self.shared.settings.save();
     }
 
     fn quit(&mut self, _ctx: &mut Context) -> bool {

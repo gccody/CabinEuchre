@@ -212,4 +212,9 @@ pub trait Scene {
     /// The app is about to close (the window was closed): keep anything worth
     /// keeping, like a game in progress.
     fn suspend(&mut self, shared: &mut Shared) {}
+
+    /// A phone switched away from the game. It's probably coming back, but the
+    /// OS may end it without another word, so save anything worth saving. Don't
+    /// give anything up, like a seat at an online table.
+    fn background(&mut self, shared: &mut Shared) {}
 }

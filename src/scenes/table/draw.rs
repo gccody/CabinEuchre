@@ -4,13 +4,15 @@ use std::f32::consts::PI;
 
 use love2drs::prelude::*;
 
-use super::layout::{self, CENTER, PROMPT_Y};
+use super::layout::{self, CENTER};
 use super::{HUMAN, Place, Prompt, Table};
 use crate::cards::{CARD_H, CARD_W, Pose};
+use crate::device;
 use crate::euchre::protocol::SeatKind;
 use crate::euchre::{Card, Phase, team_of};
 use crate::net::Status;
 use crate::palette;
+use crate::render;
 use crate::scene::Shared;
 use crate::text::Text;
 use crate::ui::{self, Rect};
@@ -19,9 +21,26 @@ use crate::ui::{self, Rect};
 const PAD: Rect = Rect::new(12.0, 11.0, 124.0, 86.0);
 const PAD_TILT: f32 = -0.035;
 /// Where score bursts fly from: the "WE" column of the pad.
-pub(super) const PAD_SCORE_US: Vec2 = Vec2::new(43.0, 44.0);
+const PAD_SCORE_US: Vec2 = Vec2::new(43.0, 44.0);
 /// Center of the brass trump medallion in the top-right corner.
 const MEDALLION: Vec2 = Vec2::new(578.0, 40.0);
+
+/// How far the top-left corner of the safe area is from the design space's
+/// (zero on a desktop): the score pad stays in that corner.
+fn left_corner() -> Vec2 {
+    let b = render::bounds();
+    vec2(b.x, b.y)
+}
+
+/// The same for the top-right corner, where the medallion stays.
+fn right_corner() -> Vec2 {
+    let b = render::bounds();
+    vec2(b.x + b.w - render::VIEW_W as f32, b.y)
+}
+
+pub(super) fn pad_score_us() -> Vec2 {
+    PAD_SCORE_US + left_corner()
+}
 
 fn team_color(team: usize) -> Color {
     if team == 0 { palette::US } else { palette::THEM }
@@ -59,7 +78,13 @@ impl Table {
             // The panel wraps however many buttons there are (online adds INVITE FRIENDS).
             let first = p.buttons.first().map_or(144.0, |(_, b)| b.rect.y);
             let last = p.buttons.last().map_or(222.0, |(_, b)| b.rect.y + b.rect.h);
-            let w = p.buttons.first().map_or(120.0, |(_, b)| b.rect.w) + 40.0;
+            let w = if device::mobile() {
+                // Two columns of buttons when there are many.
+                let left = p.buttons.iter().map(|(_, b)| b.rect.x).fold(CENTER.x, f32::min);
+                (CENTER.x - left) * 2.0 + 40.0
+            } else {
+                p.buttons.first().map_or(120.0, |(_, b)| b.rect.w) + 40.0
+            };
             let panel = Rect::new(CENTER.x - w / 2.0, first - 47.0, w, last - first + 68.0);
             let c = panel.center();
             g.translate(c.x, c.y);
@@ -83,7 +108,13 @@ impl Table {
     fn draw_connection(&self, shared: &Shared, g: &mut Graphics) {
         let font = &shared.font;
         if let Some(code) = self.link.room_code() {
-            Text::new(&format!("TABLE {code}"), 628.0, 322.0).color(palette::MUTED).anchor(1.0, 0.5).draw(g, font);
+            let (x, y) = if device::mobile() {
+                let m = self.menu_button.rect;
+                (m.x + m.w, m.y - 9.0)
+            } else {
+                (628.0, 322.0)
+            };
+            Text::new(&format!("TABLE {code}"), x, y).color(palette::MUTED).anchor(1.0, 0.5).draw(g, font);
         }
         let line = match self.link.status() {
             Status::Connected => return,
@@ -164,7 +195,7 @@ impl Table {
         let r = &self.game.round;
         let (w, h) = (PAD.w, PAD.h);
         g.push();
-        let c = PAD.center();
+        let c = PAD.center() + left_corner();
         g.translate(c.x, c.y);
         g.rotate(PAD_TILT);
         g.translate(-w / 2.0, -h / 2.0);
@@ -244,7 +275,7 @@ impl Table {
     fn draw_trump(&self, shared: &Shared, g: &mut Graphics) {
         let font = &shared.font;
         let r = &self.game.round;
-        let m = MEDALLION;
+        let m = MEDALLION + right_corner();
         let rad = 23.0;
         g.set_color(palette::INK.with_alpha(0.5));
         g.circle(Fill, m.x + 2.0, m.y + 3.0, rad + 3.0);
@@ -429,12 +460,13 @@ impl Table {
     fn draw_prompt(&self, shared: &Shared, g: &mut Graphics) {
         let font = &shared.font;
         let r = &self.game.round;
+        let prompt_y = layout::prompt_y(!self.bids.is_empty());
         if let Some((hint, t)) = &self.hint {
             let wob = (t * 30.0).sin() * (t - 1.9).max(0.0) * 6.0;
             let w = font.width(hint) + 16.0;
             g.set_color(palette::INK.with_alpha(0.7));
-            ui::chamfer(g, Fill, (CENTER.x + wob - w / 2.0).round(), PROMPT_Y - 7.0, w, 15.0, 3.0);
-            Text::new(hint, CENTER.x + wob, PROMPT_Y).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
+            ui::chamfer(g, Fill, (CENTER.x + wob - w / 2.0).round(), prompt_y - 7.0, w, 15.0, 3.0);
+            Text::new(hint, CENTER.x + wob, prompt_y).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
         } else {
             let text = match self.prompt {
                 Prompt::OrderUp => {
@@ -479,8 +511,8 @@ impl Table {
                 let bob = ((shared.time * 3.0).sin() * 0.6).round();
                 let w = font.width(&text) + 16.0;
                 g.set_color(palette::INK.with_alpha(0.6));
-                ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), PROMPT_Y - 7.0 + bob, w, 15.0, 3.0);
-                Text::new(&text, CENTER.x, PROMPT_Y + bob).color(palette::CREAM).center().draw(g, font);
+                ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), prompt_y - 7.0 + bob, w, 15.0, 3.0);
+                Text::new(&text, CENTER.x, prompt_y + bob).color(palette::CREAM).center().draw(g, font);
             }
         }
         for (_, b) in &self.bids {
@@ -544,7 +576,9 @@ impl Table {
         g.translate(-c.x, -c.y);
         // Grow to fit the widest line (the detail names the maker and can run long).
         let text_w = (font.width(b.title) * 2.5).max(font.width(&b.detail)).max(font.width(&b.points) * 1.5);
-        let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, 470.0), 112.0);
+        // A phone's bigger button needs a taller panel.
+        let h = if device::mobile() { 136.0 } else { 112.0 };
+        let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, 470.0), h);
         ui::panel(g, rect, palette::PANEL);
         Text::new(b.title, c.x, rect.y + 23.0)
             .scale(2.5)
@@ -568,7 +602,8 @@ impl Table {
         g.translate(c.x, c.y);
         g.scale(go.pop.value, go.pop.value);
         g.translate(-c.x, -c.y);
-        let rect = Rect::centered(c.x, c.y, 290.0, 150.0);
+        let h = if device::mobile() { 184.0 } else { 150.0 };
+        let rect = Rect::centered(c.x, c.y, 290.0, h);
         ui::panel(g, rect, palette::PANEL);
         let (title, color, line) = if go.won {
             ("VICTORY!", palette::GOLD, "You and Benny win the game!")

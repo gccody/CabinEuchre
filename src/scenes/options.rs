@@ -7,6 +7,7 @@
 
 use love2drs::prelude::*;
 
+use crate::device;
 use crate::juice::Spring;
 use crate::palette;
 use crate::scene::{Nav, Shared};
@@ -39,11 +40,17 @@ const OPTS: [Opt; 8] = [
 ];
 
 const PANEL: Rect = Rect::new(140.0, 40.0, 360.0, 280.0);
+/// On a phone the panel fills the screen: two columns of rows tall enough for fingers.
+const MOBILE_PANEL: Rect = Rect::new(14.0, 10.0, 612.0, 340.0);
 const ROW_Y: f32 = PANEL.y + 46.0;
 const ROW_H: f32 = 24.0;
 /// Left edge and width of the control column.
 const CTRL_X: f32 = PANEL.x + 172.0;
 const CTRL_W: f32 = 168.0;
+
+fn panel() -> Rect {
+    if device::mobile() { MOBILE_PANEL } else { PANEL }
+}
 
 enum Control {
     Slider(Slider),
@@ -53,6 +60,12 @@ enum Control {
 struct Row {
     opt: Opt,
     y: f32,
+    /// The recessed box behind the row.
+    inset: Rect,
+    label_x: f32,
+    /// Left edge and width of the row's control.
+    ctrl_x: f32,
+    ctrl_w: f32,
     control: Control,
 }
 
@@ -67,31 +80,51 @@ pub struct OptionsPanel {
 impl OptionsPanel {
     pub fn new() -> Self {
         let defaults = Settings::default();
+        let mobile = device::mobile();
         let rows = OPTS
             .iter()
+            // The OS decides what fills a phone's screen.
+            .filter(|&&opt| !(mobile && opt == Opt::Fullscreen))
             .enumerate()
             .map(|(i, &opt)| {
-                let y = ROW_Y + i as f32 * ROW_H;
+                let (y, inset, label_x, ctrl_x, ctrl_w) = if mobile {
+                    // Sliders on the left, the rest on the right.
+                    let (col_x, row) = if i < 3 { (26.0, i) } else { (328.0, i - 3) };
+                    let y = 84.0 + row as f32 * 52.0;
+                    (y, Rect::new(col_x, y - 23.0, 286.0, 46.0), col_x + 10.0, col_x + 132.0, 144.0)
+                } else {
+                    let y = ROW_Y + i as f32 * ROW_H;
+                    (y, Rect::new(PANEL.x + 10.0, y - 10.0, PANEL.w - 20.0, 20.0), PANEL.x + 20.0, CTRL_X, CTRL_W)
+                };
                 let control = match slider_value(opt, &defaults) {
                     // The value is mirrored from the settings every frame.
-                    Some(v) => Control::Slider(Slider::new(
-                        Rect::new(CTRL_X, y - 3.0, CTRL_W - 52.0, 7.0),
-                        v,
-                        if opt == Opt::Atmosphere { palette::ORANGE } else { palette::GREEN },
-                    )),
-                    None => Control::Arrows(Box::new((
-                        Button::grey("<", Rect::new(CTRL_X, y - 8.0, 18.0, 16.0)),
-                        Button::grey(">", Rect::new(CTRL_X + CTRL_W - 18.0, y - 8.0, 18.0, 16.0)),
-                    ))),
+                    Some(v) => {
+                        let track = if mobile {
+                            Rect::new(ctrl_x, y - 5.0, ctrl_w - 46.0, 10.0)
+                        } else {
+                            Rect::new(ctrl_x, y - 3.0, ctrl_w - 52.0, 7.0)
+                        };
+                        Control::Slider(Slider::new(track, v, if opt == Opt::Atmosphere { palette::ORANGE } else { palette::GREEN }))
+                    }
+                    None => {
+                        let (w, h) = if mobile { (40.0, 36.0) } else { (18.0, 16.0) };
+                        let (left, right) = (Rect::new(ctrl_x, y - h / 2.0, w, h), Rect::new(ctrl_x + ctrl_w - w, y - h / 2.0, w, h));
+                        let scale = if mobile { 1.5 } else { 1.0 };
+                        Control::Arrows(Box::new((Button::grey("<", left).scaled(scale), Button::grey(">", right).scaled(scale))))
+                    }
                 };
-                Row { opt, y, control }
+                Row { opt, y, inset, label_x, ctrl_x, ctrl_w, control }
             })
             .collect();
         let mut pop = Spring::new(0.9);
         pop.target = 1.0;
         OptionsPanel {
             rows,
-            back: Button::brass("BACK", Rect::centered(PANEL.center().x, PANEL.y + PANEL.h - 20.0, 80.0, 18.0)),
+            back: if mobile {
+                Button::brass("BACK", Rect::centered(MOBILE_PANEL.center().x, MOBILE_PANEL.y + MOBILE_PANEL.h - 32.0, 160.0, 40.0)).scaled(1.5)
+            } else {
+                Button::brass("BACK", Rect::centered(PANEL.center().x, PANEL.y + PANEL.h - 20.0, 80.0, 18.0))
+            },
             pop,
             focus: 0,
         }
@@ -242,18 +275,19 @@ impl OptionsPanel {
         let font = &shared.font;
         ui::dim_screen(g, 0.55);
         g.push();
-        let c = PANEL.center();
+        let panel = panel();
+        let c = panel.center();
         g.translate(c.x, c.y);
         g.scale(self.pop.value, self.pop.value);
         g.translate(-c.x, -c.y);
 
-        ui::panel(g, PANEL, palette::PANEL);
-        Text::new("OPTIONS", c.x, PANEL.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
+        ui::panel(g, panel, palette::PANEL);
+        Text::new("OPTIONS", c.x, panel.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
 
         let focus = shared.focus_visible().then_some(self.focus);
         for (i, row) in self.rows.iter().enumerate() {
             let y = row.y;
-            let inset = Rect::new(PANEL.x + 10.0, y - 10.0, PANEL.w - 20.0, 20.0);
+            let inset = row.inset;
             let focused = focus == Some(i);
             if focused {
                 // A pulsing brass frame around the focused row.
@@ -264,19 +298,19 @@ impl OptionsPanel {
             let fill = if focused { palette::PANEL_DARK.lerp(palette::PANEL, 0.5) } else { palette::PANEL_DARK };
             ui::inset(g, inset, fill);
             let label_color = if focused { palette::GOLD } else { palette::CREAM };
-            Text::new(label(row.opt), PANEL.x + 20.0, y).color(label_color).anchor(0.0, 0.5).draw(g, font);
+            Text::new(label(row.opt), row.label_x, y).color(label_color).anchor(0.0, 0.5).draw(g, font);
             let value = value_text(row.opt, &shared.settings);
             match &row.control {
                 Control::Slider(s) => {
                     s.draw(g);
-                    Text::new(&value, CTRL_X + CTRL_W, y)
+                    Text::new(&value, row.ctrl_x + row.ctrl_w, y)
                         .color(palette::GOLD)
                         .anchor(1.0, 0.5)
                         .draw(g, font);
                 }
                 Control::Arrows(arrows) => {
                     let (l, r) = &**arrows;
-                    Text::new(&value, CTRL_X + CTRL_W / 2.0, y)
+                    Text::new(&value, row.ctrl_x + row.ctrl_w / 2.0, y)
                         .color(palette::GOLD)
                         .center()
                         .draw(g, font);
@@ -285,7 +319,8 @@ impl OptionsPanel {
                 }
             }
         }
-        Text::new("Points and stick the dealer apply to new games", c.x, PANEL.y + PANEL.h - 44.0)
+        let note_y = if device::mobile() { panel.y + panel.h - 66.0 } else { panel.y + panel.h - 44.0 };
+        Text::new("Points and stick the dealer apply to new games", c.x, note_y)
             .color(palette::MUTED)
             .center()
             .draw(g, font);
@@ -303,6 +338,7 @@ fn label(opt: Opt) -> &'static str {
         Opt::Target => "Points to win",
         Opt::Stick => "Stick the dealer",
         Opt::Fullscreen => "Fullscreen",
+        Opt::Rumble if device::mobile() => "Pad rumble",
         Opt::Rumble => "Controller rumble",
     }
 }

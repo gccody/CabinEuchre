@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 
 use love2drs::prelude::*;
 
+use crate::device;
 use crate::euchre::protocol::{ClientMsg, ErrorCode, KnockInfo, SeatKind, SeatsInfo, ServerMsg, clean_code};
 use crate::juice::Spring;
 use crate::net::online::Join;
@@ -36,6 +37,20 @@ use crate::ui::{self, Button, Rect};
 
 const PANEL: Rect = Rect::new(130.0, 34.0, 380.0, 292.0);
 const CX: f32 = PANEL.x + PANEL.w / 2.0;
+/// On a phone the panel fills the screen (same center), so keys and buttons
+/// can be finger-sized. The seated view splits into two columns: the code and
+/// the table's settings on the left, the seats on the right.
+const MOBILE_PANEL: Rect = Rect::new(14.0, 8.0, 612.0, 344.0);
+const MOBILE_LEFT_X: f32 = 170.0;
+const MOBILE_RIGHT_X: f32 = 470.0;
+/// Middle of the little table in the phone's seated view.
+const MOBILE_SEATS_Y: f32 = 165.0;
+/// How far the top of the phone's menu and keyboard screens sits above the desktop's.
+const MOBILE_TEXT_LIFT: f32 = 22.0;
+
+fn panel() -> Rect {
+    if device::mobile() { MOBILE_PANEL } else { PANEL }
+}
 
 /// Letters for codes (no I or O) and for names.
 const CODE_KEYS: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -124,7 +139,7 @@ impl Lobby {
             age: 0.0,
             dealing: false,
             stage_age: 0.0,
-            autoplay: std::env::var("EUCHRE_AUTOPLAY").is_ok_and(|v| v == "1"),
+            autoplay: crate::device::var("EUCHRE_AUTOPLAY").is_some_and(|v| v == "1"),
         };
         l.pop.target = 1.0;
         l.set_stage(Stage::Menu, shared);
@@ -200,6 +215,9 @@ impl Lobby {
 
     /// The controls for the current stage.
     fn build(&self, shared: &Shared) -> Vec<(Act, Button)> {
+        if device::mobile() {
+            return self.build_mobile();
+        }
         let mut b: Vec<(Act, Button)> = Vec::new();
         let bottom = PANEL.y + PANEL.h - 26.0;
         match &self.stage {
@@ -275,6 +293,85 @@ impl Lobby {
             }
             Stage::Failed(_) => {
                 b.push((Act::Back, Button::brass("BACK", Rect::centered(CX, bottom, 90.0, 20.0))));
+            }
+        }
+        b
+    }
+
+    /// [`Lobby::build`] for a phone: the same controls, sized for fingers.
+    fn build_mobile(&self) -> Vec<(Act, Button)> {
+        let mut b: Vec<(Act, Button)> = Vec::new();
+        let bottom = MOBILE_PANEL.y + MOBILE_PANEL.h - 32.0;
+        // Lays a row of buttons out side by side, centered.
+        let spread = |row: &mut Vec<(Act, Button)>, gap: f32| {
+            let total: f32 = row.iter().map(|(_, b)| b.rect.w).sum::<f32>() + gap * (row.len() - 1) as f32;
+            let mut x = (CX - total / 2.0).round();
+            for (_, btn) in row.iter_mut() {
+                btn.rect.x = x;
+                x += btn.rect.w + gap;
+            }
+        };
+        match &self.stage {
+            Stage::Menu => {
+                b.push((Act::Host, Button::brass("HOST A TABLE", Rect::centered(CX, 108.0, 300.0, 46.0)).scaled(2.0)));
+                b.push((Act::JoinCode, Button::blue("JOIN WITH A CODE", Rect::centered(CX, 160.0, 300.0, 42.0)).scaled(1.5)));
+                b.push((Act::Name, Button::green("CHANGE NAME", Rect::centered(CX, 240.0, 220.0, 40.0)).scaled(1.5)));
+                b.push((Act::Back, Button::grey("BACK", Rect::centered(CX, bottom, 160.0, 40.0)).scaled(1.5)));
+            }
+            Stage::Entry(field) => {
+                let (keys, cols) = match field {
+                    Field::Code => (CODE_KEYS, 8),
+                    Field::Name => (NAME_KEYS, 9),
+                };
+                let (kw, kh, gap) = (58.0, 44.0, 6.0);
+                let width = cols as f32 * kw + (cols - 1) as f32 * gap;
+                let x0 = (CX - width / 2.0).round();
+                for (i, ch) in keys.chars().enumerate() {
+                    let (row, col) = (i / cols, i % cols);
+                    let r = Rect::new(x0 + col as f32 * (kw + gap), 112.0 + row as f32 * (kh + gap), kw, kh);
+                    let mut key = Button::new(ch.to_string(), r, palette::CREAM, palette::CREAM_SHADE.lerp(palette::INK, 0.3)).scaled(1.5);
+                    key.text_color = palette::INK;
+                    b.push((Act::Key(ch), key));
+                }
+                let y = 112.0 + 3.0 * (kh + gap) + 6.0;
+                let mut row = vec![(Act::Back, Button::grey("BACK", Rect::new(0.0, y, 110.0, 44.0)).scaled(1.5))];
+                if *field == Field::Name {
+                    row.push((Act::Space, Button::grey("SPACE", Rect::new(0.0, y, 110.0, 44.0)).scaled(1.5)));
+                }
+                row.push((Act::Erase, Button::red("DEL", Rect::new(0.0, y, 96.0, 44.0)).scaled(1.5)));
+                let done = if *field == Field::Code { "JOIN" } else { "DONE" };
+                row.push((Act::Done, Button::brass(done, Rect::new(0.0, y, 130.0, 44.0)).scaled(1.5)));
+                spread(&mut row, 12.0);
+                b.extend(row);
+            }
+            Stage::Connecting | Stage::Knocking => {
+                b.push((Act::Leave, Button::grey("CANCEL", Rect::centered(CX, bottom, 160.0, 40.0)).scaled(1.5)));
+            }
+            Stage::Seated => {
+                if let Some(k) = self.knocks.first().filter(|_| self.hosting()) {
+                    let y = MOBILE_SEATS_Y + 24.0;
+                    b.push((Act::Admit(k.id), Button::green("LET IN", Rect::centered(MOBILE_RIGHT_X - 58.0, y, 104.0, 40.0)).scaled(1.5)));
+                    b.push((Act::Refuse(k.id), Button::red("NO", Rect::centered(MOBILE_RIGHT_X + 58.0, y, 104.0, 40.0)).scaled(1.5)));
+                }
+                if self.hosting() {
+                    let public = self.seats.as_ref().is_some_and(|s| s.public);
+                    let label = if public { "MAKE PRIVATE" } else { "MAKE PUBLIC" };
+                    b.push((Act::Public(!public), Button::grey(label, Rect::centered(MOBILE_LEFT_X, 186.0, 200.0, 38.0)).scaled(1.2)));
+                }
+                for seat in 1..4 {
+                    let p = seat_pos(seat);
+                    b.push((Act::Sit(seat), Button::grey("SIT HERE", Rect::centered(p.x, p.y + 28.0, 88.0, 32.0))));
+                }
+                let mut row = vec![(Act::Deal, Button::brass("DEAL", Rect::new(0.0, bottom - 24.0, 150.0, 46.0)).scaled(2.0))];
+                if platform::can_invite() {
+                    row.push((Act::Invite, Button::blue("INVITE FRIENDS", Rect::new(0.0, bottom - 22.0, 160.0, 42.0)).scaled(1.2)));
+                }
+                row.push((Act::Leave, Button::grey("LEAVE", Rect::new(0.0, bottom - 22.0, 110.0, 42.0)).scaled(1.5)));
+                spread(&mut row, 14.0);
+                b.extend(row);
+            }
+            Stage::Failed(_) => {
+                b.push((Act::Back, Button::brass("BACK", Rect::centered(CX, bottom, 160.0, 40.0)).scaled(1.5)));
             }
         }
         b
@@ -492,7 +589,7 @@ impl Lobby {
         }
         if matches!(self.stage, Stage::Connecting | Stage::Knocking) && self.code.is_some() && self.seats.is_some() {
             shared.sfx.play(Sound::Trump);
-            if self.autoplay || std::env::var_os("EUCHRE_SCENE").is_some() {
+            if self.autoplay || crate::device::var("EUCHRE_SCENE").is_some() {
                 // Debug runs: what netcheck needs to join (the code) or knock (the handle).
                 eprintln!(
                     "[euchre] seated at table {}, handle {}",
@@ -564,6 +661,10 @@ const KNOCK_Y: f32 = SEATS_Y - 2.0;
 
 /// Where each seat's plate sits in the seated view (relative seats: you at the bottom).
 fn seat_pos(seat: usize) -> Vec2 {
+    if device::mobile() {
+        let c = vec2(MOBILE_RIGHT_X, MOBILE_SEATS_Y);
+        return [c + vec2(0.0, 58.0), c + vec2(-100.0, -20.0), c + vec2(0.0, -96.0), c + vec2(100.0, -20.0)][seat];
+    }
     let c = vec2(CX, SEATS_Y);
     [c + vec2(0.0, 44.0), c + vec2(-126.0, -6.0), c + vec2(0.0, -48.0), c + vec2(126.0, -6.0)][seat]
 }
@@ -600,11 +701,15 @@ impl Scene for Lobby {
     fn draw(&mut self, shared: &Shared, g: &mut Graphics) {
         let font = &shared.font;
         g.push();
-        let c = PANEL.center();
+        let panel = panel();
+        let mobile = device::mobile();
+        // The phone's menu and keyboard screens start higher, to fit the bigger controls.
+        let lift = if mobile { MOBILE_TEXT_LIFT } else { 0.0 };
+        let c = panel.center();
         g.translate(c.x, c.y);
         g.scale(self.pop.value, self.pop.value);
         g.translate(-c.x, -c.y);
-        ui::panel(g, PANEL, palette::PANEL);
+        ui::panel(g, panel, palette::PANEL);
         let title = match &self.stage {
             Stage::Menu => "PLAY ONLINE",
             Stage::Entry(Field::Code) => "JOIN A TABLE",
@@ -614,34 +719,36 @@ impl Scene for Lobby {
             Stage::Seated => "YOUR TABLE",
             Stage::Failed(_) => "NO LUCK",
         };
-        Text::new(title, CX, PANEL.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
+        Text::new(title, CX, panel.y + 20.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, font);
 
         match &self.stage {
             Stage::Menu => {
-                Text::new("Play with friends on any device.", CX, 78.0).color(palette::MUTED).center().draw(g, font);
-                Text::new("Bots fill the empty seats.", CX, 92.0).color(palette::MUTED).center().draw(g, font);
+                Text::new("Play with friends on any device.", CX, 78.0 - lift).color(palette::MUTED).center().draw(g, font);
+                Text::new("Bots fill the empty seats.", CX, 92.0 - lift).color(palette::MUTED).center().draw(g, font);
                 let name = shared.settings.player_name();
-                let inset = Rect::centered(CX, 210.0, 200.0, 20.0);
+                let name_y = if mobile { 200.0 } else { 210.0 };
+                let inset = Rect::centered(CX, name_y, 200.0, 20.0);
                 ui::inset(g, inset, palette::PANEL_DARK);
-                Text::new(&format!("PLAYING AS  {name}"), CX, 210.0).color(palette::CREAM).center().draw(g, font);
+                Text::new(&format!("PLAYING AS  {name}"), CX, name_y).color(palette::CREAM).center().draw(g, font);
             }
             Stage::Entry(field) => {
                 let prompt = match field {
                     Field::Code => "Type the code your host sees.",
                     Field::Name => "What should the table call you?",
                 };
-                Text::new(prompt, CX, 78.0).color(palette::MUTED).center().draw(g, font);
+                Text::new(prompt, CX, 78.0 - lift).color(palette::MUTED).center().draw(g, font);
                 match field {
                     Field::Code => {
                         let letters: Vec<char> = self.entry.chars().collect();
-                        draw_tiles(g, shared, &letters, 5, 112.0, self.age);
+                        draw_tiles(g, shared, CX, &letters, 5, 112.0 - lift * 1.2, self.age);
                     }
                     Field::Name => {
-                        let inset = Rect::centered(CX, 112.0, 200.0, 26.0);
+                        let name_y = 112.0 - lift * 1.2;
+                        let inset = Rect::centered(CX, name_y, 200.0, 26.0);
                         ui::inset(g, inset, palette::PANEL_DARK);
                         let caret = if (self.age * 2.0).fract() < 0.5 { "_" } else { " " };
                         let shown = format!("{}{caret}", self.entry);
-                        Text::new(&shown, CX, 112.0).scale(1.5).color(palette::GOLD).center().draw(g, font);
+                        Text::new(&shown, CX, name_y).scale(1.5).color(palette::GOLD).center().draw(g, font);
                     }
                 }
             }
@@ -660,11 +767,12 @@ impl Scene for Lobby {
                     .center()
                     .draw(g, font);
             }
+            Stage::Seated if mobile => self.draw_seated_mobile(shared, g),
             Stage::Seated => {
                 if let Some(code) = &self.code {
                     Text::new("TABLE CODE", CX, 76.0).color(palette::MUTED).center().draw(g, font);
                     let letters: Vec<char> = code.chars().collect();
-                    draw_tiles(g, shared, &letters, 5, 100.0, 99.0);
+                    draw_tiles(g, shared, CX, &letters, 5, 100.0, 99.0);
                     Text::new("Anyone with the code can sit right down.", CX, 126.0)
                         .color(palette::MUTED)
                         .center()
@@ -733,7 +841,7 @@ impl Scene for Lobby {
                 }
             }
             Stage::Failed(why) => {
-                for (i, line) in font.wrap(why, PANEL.w - 60.0).iter().enumerate() {
+                for (i, line) in font.wrap(why, panel.w - 60.0).iter().enumerate() {
                     Text::new(line, CX, 150.0 + i as f32 * 14.0).color(palette::CREAM).center().draw(g, font);
                 }
                 let advice = if why == ErrorCode::Declined.describe() {
@@ -756,8 +864,9 @@ impl Scene for Lobby {
         if let Some((note, _)) = &self.note {
             let w = font.width(note) + 16.0;
             g.set_color(palette::INK.with_alpha(0.75));
-            ui::chamfer(g, Fill, CX - w / 2.0, PANEL.y + PANEL.h - 58.0, w, 15.0, 3.0);
-            Text::new(note, CX, PANEL.y + PANEL.h - 50.5).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
+            let note_y = if mobile { panel.y + panel.h - 84.0 } else { panel.y + panel.h - 58.0 };
+            ui::chamfer(g, Fill, CX - w / 2.0, note_y, w, 15.0, 3.0);
+            Text::new(note, CX, note_y + 7.5).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
         }
         g.pop();
 
@@ -766,7 +875,10 @@ impl Scene for Lobby {
             (Stage::Entry(_), _) => shared.hint("D-pad: Choose   A: Type   B: Delete", "Type, or click the keys   Enter: Done   Esc: Back"),
             _ => shared.hint("D-pad: Choose   A: Select   B: Back", "Esc: Back"),
         };
-        Text::new(hint, 6.0, crate::render::VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
+        // A phone's panel reaches the bottom of the screen.
+        if !mobile {
+            Text::new(hint, 6.0, crate::render::VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
+        }
     }
 
     fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> Transition {
@@ -868,12 +980,82 @@ impl Scene for Lobby {
     }
 }
 
-/// Five letter tiles (brass for typed letters, an empty slot otherwise).
-fn draw_tiles(g: &mut Graphics, shared: &Shared, letters: &[char], n: usize, y: f32, age: f32) {
+impl Lobby {
+    /// The seated view on a phone: the code and the table's settings on the
+    /// left, the four seats around a little table on the right.
+    fn draw_seated_mobile(&self, shared: &Shared, g: &mut Graphics) {
+        let font = &shared.font;
+        let (lx, rx, sy) = (MOBILE_LEFT_X, MOBILE_RIGHT_X, MOBILE_SEATS_Y);
+        if let Some(code) = &self.code {
+            Text::new("TABLE CODE", lx, 50.0).color(palette::MUTED).center().draw(g, font);
+            let letters: Vec<char> = code.chars().collect();
+            draw_tiles(g, shared, lx, &letters, 5, 76.0, 99.0);
+            Text::new("Anyone with the code can", lx, 106.0).color(palette::MUTED).center().draw(g, font);
+            Text::new("sit right down.", lx, 118.0).color(palette::MUTED).center().draw(g, font);
+        }
+        if let Some(s) = &self.seats {
+            let (tag, rest) = self.privacy_note();
+            let width = font.width(&format!("{tag}  {rest}"));
+            let left = lx - width / 2.0;
+            let color = if s.public { palette::GOLD } else { palette::CREAM };
+            Text::new(tag, left, 144.0).color(color).anchor(0.0, 0.5).draw(g, font);
+            Text::new(rest, left + font.width(&format!("{tag}  ")), 144.0).color(palette::MUTED).anchor(0.0, 0.5).draw(g, font);
+            let (line1, line2) = if s.playing {
+                ("A game is on...".to_string(), String::new())
+            } else {
+                (format!("Playing to {}", s.target), if s.stick_the_dealer { "Stick the dealer" } else { "Misdeals redeal" }.to_string())
+            };
+            Text::new(&line1, lx, 222.0).color(palette::CREAM).center().draw(g, font);
+            Text::new(&line2, lx, 236.0).color(palette::MUTED).center().draw(g, font);
+        }
+        let felt = Rect::centered(rx, sy, 96.0, 50.0);
+        g.set_color(palette::INK);
+        ui::chamfer(g, Fill, felt.x - 1.0, felt.y - 1.0, felt.w + 2.0, felt.h + 2.0, 13.0);
+        g.set_color(palette::FELT);
+        ui::chamfer(g, Fill, felt.x, felt.y, felt.w, felt.h, 12.0);
+        Text::new("♣♦♠♥", rx, sy).color(palette::CREAM).center().draw(g, font);
+        if let Some(s) = &self.seats {
+            for seat in 0..4 {
+                let info = &s.seats[seat];
+                let p = seat_pos(seat);
+                let name = if seat == 0 { format!("{} (YOU)", info.name) } else { info.name.clone() };
+                let (color, tag) = match info.kind {
+                    SeatKind::Human => (palette::CREAM, ""),
+                    SeatKind::Away => (palette::DIM, " (AWAY)"),
+                    SeatKind::Bot => (palette::MUTED, " (BOT)"),
+                };
+                let label = format!("{name}{tag}");
+                let w = font.width(&label) + 14.0;
+                let plate = Rect::centered(p.x, p.y, w, 15.0);
+                g.set_color(palette::INK);
+                ui::chamfer(g, Fill, plate.x - 1.0, plate.y - 1.0, plate.w + 2.0, plate.h + 2.0, 4.0);
+                g.set_color(if seat % 2 == 0 { palette::US_INK } else { palette::THEM_INK });
+                ui::chamfer(g, Fill, plate.x, plate.y, plate.w, plate.h, 3.0);
+                Text::new(&label, p.x, p.y).color(color).center().draw(g, font);
+            }
+        }
+        if self.knock_showing() {
+            let k = &self.knocks[0];
+            let more = if self.knocks.len() > 1 { format!(" (+{})", self.knocks.len() - 1) } else { String::new() };
+            let line = format!("{} asks to join{more}", k.name);
+            let card = Rect::centered(rx, sy + 6.0, 300.0, 88.0);
+            g.set_color(palette::INK);
+            ui::chamfer(g, Fill, card.x - 1.0, card.y - 1.0, card.w + 2.0, card.h + 4.0, 6.0);
+            g.set_color(palette::PANEL_DARK);
+            ui::chamfer(g, Fill, card.x, card.y, card.w, card.h, 5.0);
+            g.set_color(palette::BRASS);
+            ui::chamfer(g, Line, card.x + 2.0, card.y + 2.0, card.w - 4.0, card.h - 4.0, 4.0);
+            Text::new(&line, rx, sy - 22.0).scale(1.2).color(palette::CREAM).center().draw(g, font);
+        }
+    }
+}
+
+/// Five letter tiles (brass for typed letters, an empty slot otherwise), centered on `cx`.
+fn draw_tiles(g: &mut Graphics, shared: &Shared, cx: f32, letters: &[char], n: usize, y: f32, age: f32) {
     let font = &shared.font;
     let (w, h, gap) = (26.0, 30.0, 6.0);
     let total = n as f32 * w + (n - 1) as f32 * gap;
-    let x0 = (CX - total / 2.0).round();
+    let x0 = (cx - total / 2.0).round();
     for i in 0..n {
         let r = Rect::new(x0 + i as f32 * (w + gap), y - h / 2.0, w, h);
         match letters.get(i) {
