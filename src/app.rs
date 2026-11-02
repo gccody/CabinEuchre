@@ -41,8 +41,6 @@ pub struct App {
     /// screenshot frame numbers map to predictable game time (and n > 1
     /// fast-forwards soak tests).
     fixed_dt: Option<f32>,
-    /// The atmosphere strength F2 restores when it turns the effect back on.
-    atmosphere_restore: f32,
     /// The finger that acts like the mouse (the first one down).
     primary_touch: Option<TouchId>,
     /// When the last touch event arrived. Mouse events shortly after are the
@@ -124,16 +122,12 @@ impl App {
             mouse_down: false,
             // A phone has no mouse to wait for, so no mouse-and-keyboard hints.
             input: if device::mobile() { InputMode::Touch } else { InputMode::Mouse },
-            gamepad: ctx.gamepad.is_connected(),
             rumbles: Vec::new(),
         };
         // Debug: `EUCHRE_INPUT=pad|touch` starts as if that device was used last
-        // (screenshots of the focus highlight and the pad hints without a controller).
+        // (screenshots of the focus highlight without a controller).
         match device::var("EUCHRE_INPUT").as_deref() {
-            Some("pad") => {
-                shared.input = InputMode::Buttons;
-                shared.gamepad = true;
-            }
+            Some("pad") => shared.input = InputMode::Buttons,
             Some("touch") => shared.input = InputMode::Touch,
             _ => {}
         }
@@ -163,7 +157,6 @@ impl App {
             shared,
             scene,
             fade: 1.0,
-            atmosphere_restore: 1.0,
             primary_touch: None,
             last_touch: None,
             mouse_travel: 0.0,
@@ -360,27 +353,12 @@ impl Game for App {
             self.nav(ctx, Nav::Confirm);
             return;
         }
-        // Global shortcuts.
-        match key {
-            Key::F11 => {
-                let s = &mut self.shared.settings;
-                s.fullscreen = !s.fullscreen;
-                s.save();
-                return;
-            }
-            Key::F2 => {
-                // Toggle the lamplight post-process (handy for judging raw art).
-                let s = &mut self.shared.settings;
-                if s.atmosphere > 0.0 {
-                    self.atmosphere_restore = s.atmosphere;
-                    s.atmosphere = 0.0;
-                } else {
-                    s.atmosphere = self.atmosphere_restore;
-                }
-                s.save();
-                return;
-            }
-            _ => {}
+        // Global shortcut.
+        if key == Key::F11 {
+            let s = &mut self.shared.settings;
+            s.fullscreen = !s.fullscreen;
+            s.save();
+            return;
         }
         let t = self.scene.key_pressed(&mut self.shared, key);
         self.apply(ctx, t);
@@ -455,14 +433,6 @@ impl Game for App {
         if self.primary_touch == Some(id) {
             self.primary_touch = None;
         }
-    }
-
-    fn gamepad_added(&mut self, ctx: &mut Context, _id: GamepadId) {
-        self.shared.gamepad = ctx.gamepad.is_connected();
-    }
-
-    fn gamepad_removed(&mut self, ctx: &mut Context, _id: GamepadId) {
-        self.shared.gamepad = ctx.gamepad.is_connected();
     }
 
     fn gamepad_pressed(&mut self, ctx: &mut Context, _id: GamepadId, button: GamepadButton) {

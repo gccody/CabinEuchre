@@ -88,8 +88,6 @@ pub struct Shared {
     pub mouse_down: bool,
     /// The device the player used last.
     pub input: InputMode,
-    /// Whether a gamepad is connected (picks which control hints to show).
-    pub gamepad: bool,
     /// Rumble pulses requested this frame, scheduled and played by the app.
     pub rumbles: Vec<Buzz>,
 }
@@ -160,11 +158,6 @@ impl Shared {
     /// Cards sliding together into the pile.
     pub fn gather_slide(&mut self) {
         self.buzz(0.0, 0.12, 0.1, 0.14);
-    }
-
-    /// A control hint for the current device: `pad` with a gamepad, `keys` otherwise.
-    pub fn hint<'a>(&self, pad: &'a str, keys: &'a str) -> &'a str {
-        if self.gamepad && self.input == InputMode::Buttons { pad } else { keys }
     }
 }
 

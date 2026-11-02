@@ -28,7 +28,7 @@ use crate::net::online::Join;
 use crate::net::{Connection, Link, Status, seat_memory};
 use crate::palette;
 use crate::platform;
-use crate::scene::{InputMode, Nav, Scene, Shared, Transition};
+use crate::scene::{Nav, Scene, Shared, Transition};
 use crate::scenes::table::Table;
 use crate::scenes::title::Title;
 use crate::sfx::Sound;
@@ -897,16 +897,6 @@ impl Scene for Lobby {
             Text::new(note, CX, note_y + 7.5).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
         }
         g.pop();
-
-        let hint = match (&self.stage, shared.input) {
-            (_, InputMode::Touch) => "",
-            (Stage::Entry(_), _) => shared.hint("D-pad: Choose   A: Type   B: Delete", "Type, or click the keys   Enter: Done   Esc: Back"),
-            _ => shared.hint("D-pad: Choose   A: Select   B: Back", "Esc: Back"),
-        };
-        // A phone's panel reaches the bottom of the screen.
-        if !mobile {
-            Text::new(hint, 6.0, crate::render::VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
-        }
     }
 
     fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> Transition {

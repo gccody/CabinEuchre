@@ -98,7 +98,7 @@ const PAGES: &[Page] = &[
                Bid with the buttons above your hand, or with keys:\n\
                O order up, P pass, A alone, C D S H name a suit.\n\
                Space or Enter continues after a hand. Esc pauses the game.\n\n\
-               F2 toggles the lamplight effect. F11 toggles fullscreen.\n\
+               F11 toggles fullscreen.\n\
                Change speed, volume and house rules in Options.",
         cards: &[],
     },

@@ -40,8 +40,7 @@ EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,0 EUCHRE_RESERVE=24 c
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
-of frame numbers. In game, F2 toggles the lamplight post-process (useful for judging raw art; it restores the
-slider's strength when turned back on) and F11 toggles fullscreen.
+of frame numbers. In game, F11 toggles fullscreen. To judge raw art, set the Atmosphere slider in Options to zero.
 
 The README's screenshots live in `docs/screenshots/`. They're seed 15 at frames like 340 (bidding) and
 1420 (a trick), with `EUCHRE_DEFAULT_SETTINGS=1 EUCHRE_FIXED_DT=1`. Phone shots use the preview command
@@ -61,7 +60,7 @@ the monitor's refresh rate.
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
 | `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
-| `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
+| `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight without a controller) |
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file, the saved game and the remembered online seat, so screenshots don't depend on the player's options or a game they left |
 | `EUCHRE_MOBILE=1` | use the phone and tablet layouts on the desktop (read from the environment only) |
 | `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |

@@ -16,7 +16,7 @@ use crate::juice::{self, Spring};
 use crate::palette;
 use crate::render::{VIEW_H, VIEW_W};
 use crate::savegame;
-use crate::scene::{InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
+use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::lobby::Lobby;
 use crate::scenes::table::Table;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
@@ -362,27 +362,6 @@ impl Scene for Title {
                 .color(palette::MUTED)
                 .anchor(0.5, 0.0)
                 .draw(g, font);
-        }
-
-        let pad = if self.overlay.is_some() {
-            "D-pad: Choose   A: Select   B: Back"
-        } else {
-            "D-pad: Choose   A: Select   B: Quit button"
-        };
-        let footer = match shared.input {
-            InputMode::Touch => "",
-            // A phone: no quit button, and no function keys to mention.
-            _ if device::mobile() => shared.hint("D-pad: Choose   A: Select", ""),
-            _ => shared.hint(pad, "F2: Lamplight   F11: Fullscreen   Esc: Quit"),
-        };
-        if device::mobile() {
-            // Inside the mat's stitching, and only when no panel is open.
-            if self.overlay.is_none() {
-                let b = crate::render::bounds();
-                Text::new(footer, b.x + 34.0, b.y + b.h - 34.0).color(palette::MUTED).draw(g, font);
-            }
-        } else {
-            Text::new(footer, 6.0, VIEW_H as f32 - 12.0).color(palette::MUTED).draw(g, font);
         }
 
         if let Some(o) = &self.overlay {
