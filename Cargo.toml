@@ -15,6 +15,12 @@ exclude = ["server"]
 [dependencies]
 love2drs = { git = "https://github.com/gccody/Love2DRS" }
 euchre-core = { path = "core" }
+serde_json = "1"
+# Online play: a blocking WebSocket client on a background thread, TLS via
+# rustls with the `ring` provider (pure Rust plus a little C/asm: builds for
+# Windows, macOS, Linux, Android and iOS without system OpenSSL).
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # To develop against a local checkout of the framework instead, uncomment:
 # [patch."https://github.com/gccody/Love2DRS"]

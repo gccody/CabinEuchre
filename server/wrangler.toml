@@ -1,0 +1,19 @@
+name = "euchre"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+
+[build]
+command = "worker-build --release"
+
+# One Durable Object per table, addressed by its room code. SQLite-backed
+# objects are the kind the Workers Free plan allows.
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "EuchreRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["EuchreRoom"]
+
+[observability]
+enabled = true

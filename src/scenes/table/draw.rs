@@ -5,7 +5,8 @@ use std::f32::consts::PI;
 use love2drs::prelude::*;
 
 use super::layout::{self, CENTER, PROMPT_Y};
-use super::{HUMAN, NAMES, Place, Prompt, Table};
+use super::{HUMAN, Place, Prompt, Table};
+use crate::euchre::protocol::SeatKind;
 use crate::cards::{CARD_H, CARD_W, Pose};
 use crate::euchre::{Card, Phase, team_of};
 use crate::palette;
@@ -242,7 +243,7 @@ impl Table {
                 let wob = (shared.time * 2.0).sin() * 0.05;
                 let color = crate::cards::suit_color_on_dark(trump);
                 shared.cards.draw_suit(g, trump, vec2(m.x, m.y - 2.0), 2.2 * pop, wob, color);
-                let who = if maker == HUMAN { "YOU" } else { NAMES[maker] };
+                let who = &self.names[maker];
                 Text::new(&format!("BY {who}"), m.x, m.y + rad + 18.0).center().draw(g, font);
             }
             _ => {
@@ -284,12 +285,14 @@ impl Table {
         // Light up a seat only when its action is the next real step (not during the deal).
         let next_step = self.cues.iter().find(|c| !matches!(c, super::Cue::Wait(_)));
         let waiting_on = match next_step {
-            None | Some(super::Cue::AiAct(_)) => r.to_act(),
+            None | Some(super::Cue::AiAct(_) | super::Cue::Remote(_)) => r.to_act(),
             _ => None,
         };
-        for (seat, &name) in NAMES.iter().enumerate() {
+        for (seat, name) in self.names.iter().enumerate() {
+            let name = name.as_str();
             let pos = layout::plate_pos(seat);
-            let out = r.is_sitting_out(seat);
+            // Sitting out, or (online) a player whose connection dropped.
+            let out = r.is_sitting_out(seat) || self.kinds[seat] == SeatKind::Away;
             let w = font.width(name) + 18.0;
             let rect = Rect::centered(pos.x, pos.y, w, 13.0);
             let active = waiting_on == Some(seat) && self.banner.is_none();
@@ -410,7 +413,7 @@ impl Table {
                     if r.dealer == HUMAN {
                         format!("Pick up the {} and make {} trump?", up.label(), up.suit.symbol())
                     } else {
-                        let who = if r.dealer == 2 { "your partner".to_string() } else { super::titlecase(NAMES[r.dealer]) };
+                        let who = if r.dealer == 2 { "your partner".to_string() } else { self.display_name(r.dealer) };
                         format!("Order up the {}? {who} would pick it up.", up.label())
                     }
                 }

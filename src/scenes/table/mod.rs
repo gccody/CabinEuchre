@@ -1,20 +1,30 @@
-//! The card table. Runs a [`Match`], lets the AI take its turns, animates every
-//! card and handles the human's bidding and play.
+//! The card table. Shows one player's [`Mirror`] of the hand, animates every
+//! card and handles that player's bidding and play.
 //!
-//! The rules live in `crate::euchre`; this scene mirrors them visually. Each
-//! card has a *place* (pile, hand, trick, ...) and springs that chase the
-//! position the layout gives that place, so motion never snaps. Pacing comes
-//! from a queue of timed [`Cue`]s: the deal, trick collection, results and
-//! AI turns are all scheduled through it.
+//! The game itself runs in a room (`euchre::room`) behind a [`Link`]: in this
+//! process for an offline game against bots, or on the server for an online
+//! one. Either way the table sends its own moves and receives everyone
+//! else's as messages, which wait in `pending` until the animation reaches
+//! them. Other players' cards are guesses until played (see `mirror.rs`);
+//! when a guess is corrected, the two face-down sprites trade places.
+//!
+//! Each card has a *place* (pile, hand, trick, ...) and springs that chase
+//! the position the layout gives that place, so motion never snaps. Pacing
+//! comes from a queue of timed [`Cue`]s: the deal, trick collection, results
+//! and other seats' moves (after a "thinking" pause for bots) are all
+//! scheduled through it.
 //!
 //! Input: mouse clicks, touch (the card under your finger lifts, and lifting
 //! the finger plays it), keyboard shortcuts, and gamepad [`Nav`]: left/right
 //! walks the focus along your hand or the bid buttons, A plays or bids,
 //! Y toggles alone, Start pauses.
 //!
-//! Saving: "SAVE & QUIT" in the pause menu (and closing the window mid-game)
-//! writes the match to the save slot (`crate::savegame`); [`Table::resume`]
-//! lays a saved hand back out on the felt. A finished game deletes its save.
+//! Saving (offline games): "SAVE & QUIT" in the pause menu (and closing the
+//! window mid-game) writes the match to the save slot (`crate::savegame`);
+//! [`Table::resume`] lays a saved hand back out on the felt. A finished game
+//! deletes its save. Online games live on the server instead: after a
+//! dropped connection the room resends the hand (`Sync`) and it's laid out
+//! the same way.
 //!
 //! - `layout.rs` where each place is on screen
 //! - `draw.rs`   all rendering (cards, sidebar, prompts, panels)
@@ -26,10 +36,12 @@ use std::collections::VecDeque;
 
 use love2drs::prelude::*;
 
+use crate::euchre::protocol::{ClientMsg, HandStart, Move, SeatKind, SeatsInfo, ServerMsg};
 use crate::euchre::{
-    Action, Card, HandResult, Match, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
+    Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
 };
 use crate::juice::Spring;
+use crate::net::{Link, LocalTable};
 use crate::palette;
 use crate::savegame;
 use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
@@ -41,6 +53,7 @@ use crate::ui::{Button, Rect};
 use layout::Target;
 
 pub const HUMAN: Seat = 0;
+/// Names for an offline game (the room's bots sit in seats 1-3).
 pub const NAMES: [&str; 4] = ["YOU", "ROSA", "BENNY", "JULES"];
 
 /// Where a card currently lives on the table.
@@ -110,7 +123,10 @@ enum Cue {
     UpToPile,
     KittyAside,
     SitOut(Seat),
+    /// Autoplay (`EUCHRE_AUTOPLAY`): the AI makes your move.
     AiAct(Seat),
+    /// Another seat's move, from the room.
+    Remote(Move),
     HighlightWinner,
     CollectTrick,
     ShowResult,
@@ -197,7 +213,20 @@ struct Particle {
 }
 
 pub struct Table {
-    game: Match,
+    game: Mirror,
+    link: Link,
+    /// Messages about the hand (deals, moves, resyncs), waiting for the
+    /// animation to catch up with them.
+    pending: VecDeque<ServerMsg>,
+    /// Names on the plates, by seat (you're "YOU").
+    names: [String; 4],
+    kinds: [SeatKind; 4],
+    /// The current hand's result (or misdeal) has been shown: the next deal comes from the room.
+    hand_done: bool,
+    /// Asked the room for the whole hand again; moves are ignored until it comes.
+    resyncing: bool,
+    /// Online: the PLAY AGAIN request is out, waiting for the room to deal.
+    rematch_asked: bool,
     sprites: Vec<Sprite>,
     places: [Place; 24],
     next_z: u32,
@@ -256,25 +285,72 @@ impl Table {
             .ok()
             .and_then(|t| t.parse().ok())
             .unwrap_or(s.target);
-        let game = Match::new(target, s.stick_the_dealer, seed);
-        let mut table = Table::with_match(shared, game);
-        table.begin_hand();
-        table
+        let link = Link::Local(LocalTable::new(target, s.stick_the_dealer, seed));
+        Table::join(shared, link, None, VecDeque::new())
+            .unwrap_or_else(|_| panic!("an offline game deals at once"))
     }
 
-    /// Picks a saved game back up where it was left.
+    /// Picks a saved offline game back up where it was left.
     pub fn resume(shared: &Shared, game: Match) -> Self {
-        let mut table = Table::with_match(shared, game);
+        let link = Link::Local(LocalTable::resume(game));
+        Table::join(shared, link, None, VecDeque::new())
+            .unwrap_or_else(|_| panic!("a resumed game sends its hand at once"))
+    }
+
+    /// Sits down at a room's table once it has dealt: reads messages until
+    /// the first deal (or the hand in progress) and lays it out. `pending`
+    /// holds messages already taken from the link, `seats` the latest seat
+    /// list. Gives the link back if no hand has arrived yet.
+    pub fn join(
+        shared: &Shared,
+        mut link: Link,
+        mut seats: Option<SeatsInfo>,
+        mut pending: VecDeque<ServerMsg>,
+    ) -> Result<Self, (Link, VecDeque<ServerMsg>)> {
+        while let Some(msg) = link.poll() {
+            pending.push_back(msg);
+        }
+        // Start from the latest resync (it holds everything before it), else
+        // from the first deal (later ones still need to be played out).
+        let start = pending
+            .iter()
+            .rposition(|m| matches!(m, ServerMsg::Sync { .. }))
+            .or_else(|| pending.iter().position(|m| matches!(m, ServerMsg::Deal(_))));
+        let Some(start) = start else {
+            return Err((link, pending));
+        };
+        for msg in pending.drain(..start) {
+            if let ServerMsg::Seats(s) = msg {
+                seats = Some(s);
+            }
+        }
+        let game = match pending.pop_front() {
+            Some(ServerMsg::Deal(hand)) => Mirror::new(&hand),
+            Some(ServerMsg::Sync { hand, moves }) => Mirror::replay(&hand, &moves),
+            _ => unreachable!("found above"),
+        };
+        let game = match game {
+            Ok(g) => g,
+            Err(e) => {
+                crate::assets::log_warn(&format!("the room sent a hand that doesn't replay: {e:?}"));
+                link.send(ClientMsg::Resync);
+                return Err((link, pending));
+            }
+        };
+        let mut table = Table::with_mirror(shared, game, link, pending);
+        if let Some(s) = seats {
+            table.set_seats(&s);
+        }
         if table.game.hand_untouched() {
-            // Nothing happened yet this hand: just deal it again.
             table.begin_hand();
         } else {
+            // A saved game or a reconnect: lay the hand back out.
             table.begin_resume();
         }
-        table
+        Ok(table)
     }
 
-    fn with_match(shared: &Shared, game: Match) -> Self {
+    fn with_mirror(shared: &Shared, game: Mirror, link: Link, pending: VecDeque<ServerMsg>) -> Self {
         // Before the deal, the cards are still out of sight above the table.
         let sprites = (0..24)
             .map(|i| Sprite::new(layout::CENTER.x + (i as f32 - 12.0) * 2.0, -80.0 - i as f32 * 6.0))
@@ -282,6 +358,13 @@ impl Table {
         let score_shown = game.scores;
         Table {
             game,
+            link,
+            pending,
+            names: NAMES.map(String::from),
+            kinds: [SeatKind::Human, SeatKind::Bot, SeatKind::Bot, SeatKind::Bot],
+            hand_done: false,
+            resyncing: false,
+            rematch_asked: false,
             sprites,
             places: [Place::Pile; 24],
             next_z: 1,
@@ -312,6 +395,136 @@ impl Table {
             autoplay: std::env::var("EUCHRE_AUTOPLAY").is_ok_and(|v| v == "1"),
             delay: shared.settings.delay_factor(),
         }
+    }
+
+    pub fn is_online(&self) -> bool {
+        self.link.is_online()
+    }
+
+    fn set_seats(&mut self, s: &SeatsInfo) {
+        for seat in 1..4 {
+            let info = &s.seats[seat];
+            if self.kinds[seat] != info.kind && self.link.is_online() {
+                let line = match info.kind {
+                    SeatKind::Human if self.kinds[seat] == SeatKind::Away => Some("I'm back!"),
+                    SeatKind::Human => Some("Deal me in!"),
+                    SeatKind::Away => Some("(connection lost)"),
+                    SeatKind::Bot => None,
+                };
+                if let Some(line) = line {
+                    self.say(seat, line.into());
+                }
+            }
+            self.names[seat] = info.name.clone();
+            self.kinds[seat] = info.kind;
+        }
+    }
+
+    /// Takes everything the room has sent. Seat changes and errors apply at
+    /// once; anything about the hand waits in `pending` for the animation.
+    fn pump_link(&mut self) {
+        while let Some(msg) = self.link.poll() {
+            match msg {
+                ServerMsg::Seats(s) => self.set_seats(&s),
+                ServerMsg::Welcome { .. } => {}
+                ServerMsg::Error { message, .. } => self.hint = Some((message, 2.2)),
+                ServerMsg::Sync { .. } => {
+                    // The whole hand: moves queued before it are already in it.
+                    self.pending.retain(|m| !matches!(m, ServerMsg::Acted(_) | ServerMsg::Sync { .. }));
+                    self.pending.push_back(msg);
+                }
+                ServerMsg::Deal(_) | ServerMsg::Acted(_) => self.pending.push_back(msg),
+            }
+        }
+    }
+
+    /// Something didn't add up between this table and the room: ask for the
+    /// whole hand again, and ignore moves until it arrives.
+    fn request_resync(&mut self) {
+        self.resyncing = true;
+        self.pending.retain(|m| !matches!(m, ServerMsg::Acted(_)));
+        self.link.send(ClientMsg::Resync);
+    }
+
+    /// Takes the next message about the hand, once the table is ready for it.
+    fn next_from_room(&mut self) {
+        let Some(msg) = self.pending.pop_front() else { return };
+        match msg {
+            ServerMsg::Deal(hand) => self.new_hand(&hand),
+            ServerMsg::Sync { hand, moves } => self.lay_out(&hand, &moves),
+            ServerMsg::Acted(mv) => {
+                if self.resyncing {
+                    return;
+                }
+                let think = if mv.seat == HUMAN {
+                    // Your turn timed out and the room moved for you.
+                    0.0
+                } else if self.kinds[mv.seat] == SeatKind::Human {
+                    // A person already took their time deciding.
+                    0.15
+                } else {
+                    let base = match self.game.round.phase {
+                        Phase::OrderUp | Phase::NameTrump => 0.8,
+                        Phase::DealerDiscard => 0.6,
+                        _ => 0.42,
+                    };
+                    base + random_range(0.0, 0.25)
+                };
+                self.cue(Cue::Wait(think));
+                self.cue(Cue::Remote(mv));
+            }
+            _ => {}
+        }
+    }
+
+    fn reset_hand_state(&mut self) {
+        self.cues.clear();
+        self.prompt = Prompt::None;
+        self.bids.clear();
+        self.hand_done = false;
+        self.resyncing = false;
+        self.winner_glow = None;
+    }
+
+    /// A new deal from the room.
+    fn new_hand(&mut self, hand: &HandStart) {
+        match Mirror::new(hand) {
+            Ok(m) => {
+                self.game = m;
+                self.score_shown = self.game.scores;
+                self.reset_hand_state();
+                self.begin_hand();
+            }
+            Err(e) => {
+                crate::assets::log_warn(&format!("unusable deal from the room: {e:?}"));
+                self.request_resync();
+            }
+        }
+    }
+
+    /// The whole hand so far (a resync or a reconnect): lay it back out.
+    fn lay_out(&mut self, hand: &HandStart, moves: &[Move]) {
+        match Mirror::replay(hand, moves) {
+            Ok(m) => {
+                self.game = m;
+                self.score_shown = self.game.scores;
+                self.banner = None;
+                self.reset_hand_state();
+                if self.game.hand_untouched() {
+                    self.begin_hand();
+                } else {
+                    self.begin_resume();
+                }
+            }
+            Err(e) => crate::assets::log_warn(&format!("the room sent a hand that doesn't replay: {e:?}")),
+        }
+    }
+
+    /// Hidden cards the mirror traded (see `mirror.rs`): their sprites trade
+    /// places too. Both are face down, so nothing visibly changes.
+    fn swap_cards(&mut self, a: Card, b: Card) {
+        self.sprites.swap(a.id(), b.id());
+        self.places.swap(a.id(), b.id());
     }
 
     // ------------------------------------------------------------------
@@ -438,10 +651,14 @@ impl Table {
         self.cue(Cue::Wait(0.6));
     }
 
-    /// Writes the game to the save slot, unless it's already over.
+    /// Writes an offline game to the save slot, unless it's already over.
+    /// (The room's match may be a few bot moves ahead of the animation;
+    /// they were already decided, so resuming simply shows them done.)
     fn save(&self) {
-        if self.game_over.is_none() {
-            savegame::write(&self.game);
+        if self.game_over.is_none()
+            && let Some(m) = self.link.local_match()
+        {
+            savegame::write(m);
         }
     }
 
@@ -506,11 +723,14 @@ impl Table {
                 sfx.play(Sound::CardSlide);
             }
             Cue::AiAct(seat) => {
-                if self.game.round.to_act() == Some(seat) {
+                // Only if nothing (a timed-out turn, a resync) came in meanwhile.
+                if self.game.round.to_act() == Some(seat) && seat == HUMAN && self.pending.is_empty() {
+                    // The AI only reads what this seat can know, so it plays from the mirror.
                     let action = ai::choose(&self.game.round, seat);
                     self.perform(seat, action, shared);
                 }
             }
+            Cue::Remote(mv) => self.perform_remote(mv, shared),
             Cue::HighlightWinner => {
                 let r = &self.game.round;
                 let winner = r.turn;
@@ -539,10 +759,8 @@ impl Table {
                 sfx.play(Sound::CardSlide);
             }
             Cue::ShowResult => self.show_result(shared),
-            Cue::Redeal => {
-                self.game.next_hand();
-                self.begin_hand();
-            }
+            // The room has already dealt again; `drive` takes the deal next.
+            Cue::Redeal => self.hand_done = true,
             Cue::Say(seat, text) => self.say(seat, text),
             Cue::Lay(cards, sound) => {
                 for (card, place) in cards {
@@ -555,7 +773,20 @@ impl Table {
 
     /// Decides what happens next when the timeline is idle.
     fn drive(&mut self, shared: &Shared) {
-        if self.banner.is_some() || self.game_over.is_some() {
+        if self.game_over.is_some() {
+            // Online: someone asked for another game and the room dealt it.
+            let rematch = match self.pending.front() {
+                Some(ServerMsg::Deal(h) | ServerMsg::Sync { hand: h, .. }) => h.game != self.game.game,
+                _ => false,
+            };
+            if rematch {
+                self.game_over = None;
+                self.rematch_asked = false;
+                self.next_from_room();
+            }
+            return;
+        }
+        if self.banner.is_some() {
             return;
         }
         let r = &self.game.round;
@@ -567,32 +798,31 @@ impl Table {
                 self.cue(Cue::CollectTrick);
                 self.cue(Cue::Wait(0.3));
             }
-            Phase::HandOver => {
+            Phase::HandOver if !self.hand_done => {
                 self.cue(Cue::Wait(0.2));
                 self.cue(Cue::ShowResult);
             }
-            Phase::Misdeal => {
+            Phase::Misdeal if !self.hand_done => {
                 let dealer = r.dealer;
                 self.cue(Cue::Say(dealer, "Misdeal! Redeal.".into()));
                 self.cue(Cue::Wait(1.2));
                 self.cue(Cue::Redeal);
             }
+            // Waiting for the next deal.
+            Phase::HandOver | Phase::Misdeal => self.next_from_room(),
             _ => {
                 let Some(seat) = r.to_act() else { return };
-                if seat == HUMAN && !self.autoplay {
+                if seat != HUMAN || !self.pending.is_empty() {
+                    // Another seat's move (or a move made for you, or a resync) from the room.
+                    self.prompt = Prompt::None;
+                    self.bids.clear();
+                    self.next_from_room();
+                } else if !self.autoplay {
                     self.setup_prompt(&shared.cards);
-                } else if seat == HUMAN {
+                } else if self.prompt == Prompt::None {
                     // Autoplay: show the prompt for a moment, then let the AI decide.
                     self.setup_prompt(&shared.cards);
                     self.cue(Cue::Wait(1.2));
-                    self.cue(Cue::AiAct(seat));
-                } else {
-                    let think = match r.phase {
-                        Phase::OrderUp | Phase::NameTrump => 0.8,
-                        Phase::DealerDiscard => 0.6,
-                        _ => 0.42,
-                    } + random_range(0.0, 0.25);
-                    self.cue(Cue::Wait(think));
                     self.cue(Cue::AiAct(seat));
                 }
             }
@@ -603,18 +833,42 @@ impl Table {
     // Actions
     // ------------------------------------------------------------------
 
+    /// Your move: checked by the rules here (exactly as the room will check
+    /// it), sent to the room, and shown.
     fn perform(&mut self, seat: Seat, action: Action, shared: &mut Shared) -> bool {
+        debug_assert_eq!(seat, HUMAN);
         let before = self.game.round.phase;
         let dealer = self.game.round.dealer;
-        if let Err(e) = self.game.apply(seat, action) {
-            if seat == HUMAN {
-                shared.sfx.play(Sound::Deny);
-                self.hint = Some((explain(e, &self.game.round), 2.2));
-            } else {
-                crate::assets::log_warn(&format!("AI move {action:?} rejected: {e:?}"));
-            }
+        if let Err(e) = self.game.act(action) {
+            shared.sfx.play(Sound::Deny);
+            self.hint = Some((explain(e, &self.game.round), 2.2));
             return false;
         }
+        self.link.send(ClientMsg::Act { action });
+        self.show_action(seat, action, before, dealer, shared);
+        true
+    }
+
+    /// Another seat's move from the room (or yours, if your turn timed out).
+    fn perform_remote(&mut self, mv: Move, shared: &mut Shared) {
+        let before = self.game.round.phase;
+        let dealer = self.game.round.dealer;
+        match self.game.reveal(mv) {
+            Ok((action, swaps)) => {
+                for (a, b) in swaps {
+                    self.swap_cards(a, b);
+                }
+                self.show_action(mv.seat, action, before, dealer, shared);
+            }
+            Err(e) => {
+                crate::assets::log_warn(&format!("move {mv:?} doesn't fit this table ({e:?}); resyncing"));
+                self.request_resync();
+            }
+        }
+    }
+
+    /// Mirrors a move that was just applied: speech, sounds and card motion.
+    fn show_action(&mut self, seat: Seat, action: Action, before: Phase, dealer: Seat, shared: &mut Shared) {
         self.prompt = Prompt::None;
         self.bids.clear();
         self.hint = None;
@@ -684,7 +938,11 @@ impl Table {
         if seat == HUMAN && matches!(action, Action::Play { .. } | Action::Discard { .. }) {
             shared.tap();
         }
-        true
+    }
+
+    /// How a seat is named in sentences ("You", "Rosa").
+    fn display_name(&self, seat: Seat) -> String {
+        if seat == HUMAN { "You".to_string() } else { titlecase(&self.names[seat]) }
     }
 
     fn sit_out_partner(&mut self, maker: Seat) {
@@ -699,7 +957,7 @@ impl Table {
     fn announce_trump(&mut self, shared: &Shared) {
         let r = &self.game.round;
         let (Some(trump), Some(maker)) = (r.trump, r.maker) else { return };
-        let who = if maker == HUMAN { "YOU".to_string() } else { NAMES[maker].to_string() };
+        let who = self.names[maker].clone();
         let alone = if r.alone { " ALONE" } else { "" };
         let mut pop = Spring::new(0.4);
         pop.target = 1.0;
@@ -723,7 +981,7 @@ impl Table {
     fn show_result(&mut self, shared: &mut Shared) {
         let Some(result) = self.game.score_hand() else { return };
         let r = &self.game.round;
-        let maker_name = if result.maker == HUMAN { "You".to_string() } else { titlecase(NAMES[result.maker]) };
+        let maker_name = self.display_name(result.maker);
         let trump = r.trump.map(|t| t.symbol()).unwrap_or('?');
         let we_scored = result.scoring_team == 0;
         let title = match (result.kind, result.alone, we_scored) {
@@ -776,7 +1034,9 @@ impl Table {
         if let Some(winner) = self.game.winner() {
             let won = winner == 0;
             // This game is finished, so it can't be continued any more.
-            savegame::forget(self.game.id);
+            if let Some(m) = self.link.local_match() {
+                savegame::forget(m.id);
+            }
             if self.autoplay {
                 eprintln!(
                     "[euchre] autoplay: game over after {} hands, {}-{}",
@@ -804,13 +1064,33 @@ impl Table {
                 shared.sfx.play(Sound::Womp);
             }
         } else {
-            self.game.next_hand();
-            self.begin_hand();
+            // The room dealt the next hand already; `drive` picks it up.
+            self.hand_done = true;
         }
     }
 
     fn new_game(&mut self, shared: &Shared) {
-        *self = Table::new(shared);
+        if self.link.is_online() {
+            // Everyone at the table gets the new deal; `drive` lays it out.
+            if !self.rematch_asked {
+                self.rematch_asked = true;
+                self.link.send(ClientMsg::Start);
+            }
+            self.hint = Some(("Shuffling up a new game...".into(), 3.0));
+        } else {
+            *self = Table::new(shared);
+        }
+    }
+
+    /// Back to the title: an offline game is saved, an online seat goes to a bot.
+    fn quit_to_title(&mut self, shared: &mut Shared) -> Transition {
+        if self.link.is_online() {
+            self.link.send(ClientMsg::Leave);
+        } else {
+            self.save();
+        }
+        shared.settings.save();
+        Transition::Switch(Box::new(Title::new()))
     }
 
     fn burst(&mut self, at: Vec2, count: usize) {
@@ -969,8 +1249,15 @@ impl Table {
         let mut pop = Spring::new(0.85);
         pop.target = 1.0;
         let w = 120.0;
-        // Once the game is over there is nothing left to save.
-        let quit_label = if self.game_over.is_some() { "MAIN MENU" } else { "SAVE & QUIT" };
+        // Once the game is over there is nothing left to save. Online games
+        // aren't saved: leaving hands your seat to a bot.
+        let quit_label = if self.link.is_online() {
+            "LEAVE TABLE"
+        } else if self.game_over.is_some() {
+            "MAIN MENU"
+        } else {
+            "SAVE & QUIT"
+        };
         self.pause = Some(Pause {
             buttons: vec![
                 (PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 154.0, w, 20.0))),
@@ -989,11 +1276,7 @@ impl Table {
             PauseChoice::Resume => self.pause = None,
             PauseChoice::Options => self.overlay = Some(Overlay::Options(Box::new(OptionsPanel::new()))),
             PauseChoice::Rules => self.overlay = Some(Overlay::Rules(Box::new(RulesPanel::new()))),
-            PauseChoice::Quit => {
-                self.save();
-                shared.settings.save();
-                return Transition::Switch(Box::new(Title::new()));
-            }
+            PauseChoice::Quit => return self.quit_to_title(shared),
         }
         Transition::None
     }
@@ -1145,6 +1428,7 @@ fn explain(e: RuleError, r: &crate::euchre::Round) -> String {
 impl Scene for Table {
     fn update(&mut self, shared: &mut Shared, _ctx: &mut Context, dt: f32) -> Transition {
         self.delay = shared.settings.delay_factor();
+        self.pump_link();
         if let Some(o) = &mut self.overlay {
             o.update(shared, dt);
         }
@@ -1193,7 +1477,10 @@ impl Scene for Table {
             let m = if self.pause.is_none() { shared.mouse } else { NO_POINTER };
             b.button.focused = focus && self.pause.is_none() && b.age > 0.4;
             b.button.update(m, dt, &shared.sfx);
-            if self.autoplay && b.age > 2.0 {
+            // Online, the table moves on without you after a while, so a
+            // player reading the result doesn't hold up the next bid.
+            let patience = if self.link.is_online() { 7.0 } else { f32::INFINITY };
+            if (self.autoplay && b.age > 2.0) || b.age > patience {
                 self.continue_after_hand(shared);
             }
         }
@@ -1336,7 +1623,7 @@ impl Scene for Table {
                 Nav::Confirm => {
                     go.menu.flash(&shared.sfx);
                     shared.tap();
-                    return Transition::Switch(Box::new(Title::new()));
+                    return self.quit_to_title(shared);
                 }
                 _ => {}
             }
@@ -1438,7 +1725,7 @@ impl Scene for Table {
             if go.again.click(pos, &shared.sfx) {
                 self.new_game(shared);
             } else if go.menu.click(pos, &shared.sfx) {
-                return Transition::Switch(Box::new(Title::new()));
+                return self.quit_to_title(shared);
             }
             return Transition::None;
         }

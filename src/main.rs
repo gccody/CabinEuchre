@@ -20,6 +20,7 @@ mod assets;
 mod cards;
 use euchre_core as euchre;
 mod juice;
+mod net;
 mod palette;
 mod render;
 mod savegame;
