@@ -241,6 +241,8 @@ impl DurableObject for EuchreRoom {
                 empty_since: Some(now),
             };
             self.state.storage().put("room", serde_json::to_string(&saved)?).await?;
+            // Cleans up a room whose host never says hello.
+            self.state.storage().set_alarm((now + EMPTY_ROOM_MS) as i64).await?;
             *self.saved.borrow_mut() = Some(saved);
         }
 

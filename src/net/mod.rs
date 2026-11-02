@@ -17,7 +17,7 @@ pub use local::LocalTable;
 pub use online::{Connection, Status};
 
 pub enum Link {
-    Local(LocalTable),
+    Local(Box<LocalTable>),
     Online(Connection),
 }
 

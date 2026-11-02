@@ -21,6 +21,11 @@ serde_json = "1"
 # Windows, macOS, Linux, Android and iOS without system OpenSSL).
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Steam builds only (`cargo build --features steam`): names, invites, rich presence.
+steamworks = { version = "0.13", optional = true }
+
+[features]
+steam = ["dep:steamworks"]
 
 # To develop against a local checkout of the framework instead, uncomment:
 # [patch."https://github.com/gccody/Love2DRS"]

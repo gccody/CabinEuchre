@@ -15,7 +15,7 @@ use crate::cards::CardArt;
 use crate::palette;
 use crate::render::{Renderer, VIEW_H, VIEW_W};
 use crate::scene::{Buzz, InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
-use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel, table::Table, title::Title};
+use crate::scenes::{Overlay, lobby::Lobby, options::OptionsPanel, rules::RulesPanel, table::Table, title::Title};
 use crate::settings::Settings;
 use crate::sfx::Sfx;
 use crate::text::PixelFont;
@@ -139,9 +139,15 @@ impl App {
         shared.sfx.start_music();
         // Held arrow keys repeat focus moves (every other key ignores repeats).
         ctx.keyboard.set_key_repeat(true);
-        // Debug: `EUCHRE_SCENE=table|continue|options|rules` jumps straight to a screen (for screenshots).
+        crate::platform::init();
+        // Debug: `EUCHRE_SCENE=table|continue|online|options|rules` jumps straight to a screen (for screenshots).
         let scene: Box<dyn Scene> = match std::env::var("EUCHRE_SCENE").as_deref() {
+            // Launched from a friend's Steam invite (`+connect CODE`).
+            _ if let Some(code) = crate::platform::take_join_request() => Box::new(Lobby::join(&shared, &code)),
             Ok("table") => Box::new(Table::new(&shared)),
+            Ok("online") => Box::new(Lobby::new(&shared)),
+            Ok("host") => Box::new(Lobby::host(&shared)),
+            Ok("code") => Box::new(Lobby::entering_code(&shared, "KQJ")),
             Ok("continue") => match crate::savegame::load() {
                 Some(game) => Box::new(Table::resume(&shared, game)),
                 None => Box::new(Title::new()),
@@ -301,6 +307,15 @@ impl Game for App {
         self.renderer.update(&ctx.graphics, self.shared.time);
         self.poll_directions(ctx, real_dt);
         (self.shared.mouse, self.shared.mouse_down) = self.pointer(ctx);
+        crate::platform::update();
+        if let Some(code) = crate::platform::take_join_request() {
+            // A friend's invite accepted from the Steam overlay: leave whatever
+            // we're doing (an offline game is saved) and go to their table.
+            self.scene.suspend(&mut self.shared);
+            self.shared.settings.save();
+            let lobby = Lobby::join(&self.shared, &code);
+            self.apply(ctx, Transition::Switch(Box::new(lobby)));
+        }
         let t = self.scene.update(&mut self.shared, ctx, dt);
         self.apply(ctx, t);
         self.play_rumble(ctx, real_dt);

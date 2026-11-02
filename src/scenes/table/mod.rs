@@ -192,6 +192,8 @@ struct GameOver {
 #[derive(Clone, Copy)]
 enum PauseChoice {
     Resume,
+    /// Online, with Steam: the overlay's invite dialog for this table.
+    Invite,
     Options,
     Rules,
     Quit,
@@ -285,14 +287,14 @@ impl Table {
             .ok()
             .and_then(|t| t.parse().ok())
             .unwrap_or(s.target);
-        let link = Link::Local(LocalTable::new(target, s.stick_the_dealer, seed));
+        let link = Link::Local(Box::new(LocalTable::new(target, s.stick_the_dealer, seed)));
         Table::join(shared, link, None, VecDeque::new())
             .unwrap_or_else(|_| panic!("an offline game deals at once"))
     }
 
     /// Picks a saved offline game back up where it was left.
     pub fn resume(shared: &Shared, game: Match) -> Self {
-        let link = Link::Local(LocalTable::resume(game));
+        let link = Link::Local(Box::new(LocalTable::resume(game)));
         Table::join(shared, link, None, VecDeque::new())
             .unwrap_or_else(|_| panic!("a resumed game sends its hand at once"))
     }
@@ -306,7 +308,7 @@ impl Table {
         mut link: Link,
         mut seats: Option<SeatsInfo>,
         mut pending: VecDeque<ServerMsg>,
-    ) -> Result<Self, (Link, VecDeque<ServerMsg>)> {
+    ) -> Result<Self, Box<(Link, VecDeque<ServerMsg>)>> {
         while let Some(msg) = link.poll() {
             pending.push_back(msg);
         }
@@ -317,7 +319,7 @@ impl Table {
             .rposition(|m| matches!(m, ServerMsg::Sync { .. }))
             .or_else(|| pending.iter().position(|m| matches!(m, ServerMsg::Deal(_))));
         let Some(start) = start else {
-            return Err((link, pending));
+            return Err(Box::new((link, pending)));
         };
         for msg in pending.drain(..start) {
             if let ServerMsg::Seats(s) = msg {
@@ -334,7 +336,7 @@ impl Table {
             Err(e) => {
                 crate::assets::log_warn(&format!("the room sent a hand that doesn't replay: {e:?}"));
                 link.send(ClientMsg::Resync);
-                return Err((link, pending));
+                return Err(Box::new((link, pending)));
             }
         };
         let mut table = Table::with_mirror(shared, game, link, pending);
@@ -397,11 +399,11 @@ impl Table {
         }
     }
 
-    pub fn is_online(&self) -> bool {
-        self.link.is_online()
-    }
-
     fn set_seats(&mut self, s: &SeatsInfo) {
+        if let Some(code) = self.link.room_code() {
+            let people = s.seats.iter().filter(|x| x.kind != SeatKind::Bot).count();
+            crate::platform::set_presence(Some((&code, people)));
+        }
         for seat in 1..4 {
             let info = &s.seats[seat];
             if self.kinds[seat] != info.kind && self.link.is_online() {
@@ -1086,6 +1088,7 @@ impl Table {
     fn quit_to_title(&mut self, shared: &mut Shared) -> Transition {
         if self.link.is_online() {
             self.link.send(ClientMsg::Leave);
+            crate::platform::set_presence(None);
         } else {
             self.save();
         }
@@ -1258,22 +1261,30 @@ impl Table {
         } else {
             "SAVE & QUIT"
         };
-        self.pause = Some(Pause {
-            buttons: vec![
-                (PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 154.0, w, 20.0))),
-                (PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 180.0, w, 20.0))),
-                (PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 206.0, w, 20.0))),
-                (PauseChoice::Quit, Button::red(quit_label, Rect::centered(cx, 232.0, w, 20.0))),
-            ],
-            pop,
-            focus: 0,
-        });
+        let mut buttons = vec![(PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 0.0, w, 20.0)))];
+        if self.link.room_code().is_some() && crate::platform::can_invite() {
+            buttons.push((PauseChoice::Invite, Button::new("INVITE FRIENDS", Rect::centered(cx, 0.0, w, 20.0), palette::ORANGE, palette::ORANGE_DARK)));
+        }
+        buttons.push((PauseChoice::Options, Button::blue("OPTIONS", Rect::centered(cx, 0.0, w, 20.0))));
+        buttons.push((PauseChoice::Rules, Button::green("HOW TO PLAY", Rect::centered(cx, 0.0, w, 20.0))));
+        buttons.push((PauseChoice::Quit, Button::red(quit_label, Rect::centered(cx, 0.0, w, 20.0))));
+        // A column centered on the table, 26 px apart.
+        let top = 196.0 - 13.0 * buttons.len() as f32;
+        for (i, (_, b)) in buttons.iter_mut().enumerate() {
+            b.rect.y = top + i as f32 * 26.0;
+        }
+        self.pause = Some(Pause { buttons, pop, focus: 0 });
         shared.sfx.play(Sound::Pop);
     }
 
     fn pause_choice(&mut self, choice: PauseChoice, shared: &mut Shared) -> Transition {
         match choice {
             PauseChoice::Resume => self.pause = None,
+            PauseChoice::Invite => {
+                if let Some(code) = self.link.room_code() {
+                    crate::platform::invite_friends(&code);
+                }
+            }
             PauseChoice::Options => self.overlay = Some(Overlay::Options(Box::new(OptionsPanel::new()))),
             PauseChoice::Rules => self.overlay = Some(Overlay::Rules(Box::new(RulesPanel::new()))),
             PauseChoice::Quit => return self.quit_to_title(shared),
@@ -1506,7 +1517,13 @@ impl Scene for Table {
     }
 
     fn suspend(&mut self, _shared: &mut Shared) {
-        self.save();
+        if self.link.is_online() {
+            // Closing the game: a bot takes the seat right away.
+            self.link.send(ClientMsg::Leave);
+            crate::platform::set_presence(None);
+        } else {
+            self.save();
+        }
     }
 
     fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> Transition {

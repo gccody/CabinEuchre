@@ -1,2 +1,8 @@
 /target
 *.png.tmp
+
+# Steam dev files (see CLAUDE.md, Online play)
+steam_appid.txt
+steam_api64.dll
+libsteam_api.so
+libsteam_api.dylib

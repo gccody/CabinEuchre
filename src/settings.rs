@@ -20,6 +20,8 @@ pub struct Settings {
     /// Controller rumble: clicks on selections and focus moves, the shuffle and
     /// deal, and big moments (euchres, marches, game over).
     pub rumble: bool,
+    /// Your name at online tables (empty: the Steam name, else "PLAYER").
+    pub name: String,
 }
 
 /// Where the game keeps its files: `%APPDATA%\Euchre` on Windows,
@@ -44,11 +46,20 @@ impl Default for Settings {
             target: 10,
             fullscreen: false,
             rumble: true,
+            name: String::new(),
         }
     }
 }
 
 impl Settings {
+    /// The name to sit down with online: yours, else the store's, else "PLAYER".
+    pub fn player_name(&self) -> String {
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        crate::euchre::protocol::clean_name(&crate::platform::player_name().unwrap_or_default())
+    }
+
     /// Multiplier for pauses and AI "thinking" time.
     pub fn delay_factor(&self) -> f32 {
         [1.4, 1.0, 0.55][self.speed.min(2)]
@@ -88,6 +99,7 @@ impl Settings {
                 "target" => s.target = v.parse().ok().filter(|t| TARGETS.contains(t)).unwrap_or(s.target),
                 "fullscreen" => s.fullscreen = b,
                 "rumble" => s.rumble = b,
+                "name" if !v.is_empty() => s.name = crate::euchre::protocol::clean_name(v),
                 _ => {}
             }
         }
@@ -103,7 +115,7 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\n",
+            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\nname={}\n",
             self.volume,
             self.music,
             self.atmosphere,
@@ -111,7 +123,8 @@ impl Settings {
             self.stick_the_dealer,
             self.target,
             self.fullscreen,
-            self.rumble
+            self.rumble,
+            self.name
         );
         if let Err(e) = std::fs::write(&path, text) {
             crate::assets::log_warn(&format!("could not save settings: {e}"));

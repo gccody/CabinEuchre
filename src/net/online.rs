@@ -71,15 +71,17 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// Starts connecting in the background.
-    pub fn open(join: Join, name: &str) -> Connection {
+    /// Starts connecting in the background. `create_query` (such as
+    /// `?target=10&stick=1`) sets up a new room's game.
+    pub fn open(join: Join, name: &str, create_query: &str) -> Connection {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let name = name.to_string();
         let server = server_url();
+        let query = create_query.to_string();
         std::thread::Builder::new()
             .name("euchre-net".into())
-            .spawn(move || run(server, join, name, command_rx, event_tx))
+            .spawn(move || run(server, join, query, name, command_rx, event_tx))
             .expect("spawn the network thread");
         Connection { commands, events, status: Status::Connecting, room: None, inbox: VecDeque::new() }
     }
@@ -143,13 +145,13 @@ enum Ended {
     Dropped,
 }
 
-fn run(server: String, mut join: Join, name: String, commands: Receiver<Command>, events: Sender<Event>) {
+fn run(server: String, mut join: Join, query: String, name: String, commands: Receiver<Command>, events: Sender<Event>) {
     let mut token: Option<String> = None;
     let mut failures = 0u32;
     let mut was_connected = false;
     loop {
         let url = match &join {
-            Join::Create => format!("{server}/create"),
+            Join::Create => format!("{server}/create{query}"),
             Join::Code(code) => format!("{server}/join/{code}"),
         };
         match connect(&url) {

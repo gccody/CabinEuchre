@@ -1,5 +1,6 @@
 //! Individual screens, plus the modal overlays they share.
 
+pub mod lobby;
 pub mod options;
 pub mod rules;
 pub mod table;

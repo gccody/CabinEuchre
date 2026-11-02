@@ -6,9 +6,10 @@ use love2drs::prelude::*;
 
 use super::layout::{self, CENTER, PROMPT_Y};
 use super::{HUMAN, Place, Prompt, Table};
-use crate::euchre::protocol::SeatKind;
 use crate::cards::{CARD_H, CARD_W, Pose};
+use crate::euchre::protocol::SeatKind;
 use crate::euchre::{Card, Phase, team_of};
+use crate::net::Status;
 use crate::palette;
 use crate::scene::Shared;
 use crate::text::Text;
@@ -37,6 +38,7 @@ impl Table {
         self.draw_scorepad(shared, g);
         self.draw_trump(shared, g);
         self.menu_button.draw(g, &shared.font);
+        self.draw_connection(shared, g);
         self.draw_plates(shared, g);
         self.draw_cards(shared, g);
         self.draw_particles(g);
@@ -54,12 +56,17 @@ impl Table {
         if let Some(p) = &self.pause {
             ui::dim_screen(g, 0.6);
             g.push();
-            let c = vec2(CENTER.x, 180.0);
+            // The panel wraps however many buttons there are (online adds INVITE FRIENDS).
+            let first = p.buttons.first().map_or(144.0, |(_, b)| b.rect.y);
+            let last = p.buttons.last().map_or(222.0, |(_, b)| b.rect.y + b.rect.h);
+            let panel = Rect::new(CENTER.x - 80.0, first - 47.0, 160.0, last - first + 68.0);
+            let c = panel.center();
             g.translate(c.x, c.y);
             g.scale(p.pop.value, p.pop.value);
             g.translate(-c.x, -c.y);
-            ui::panel(g, Rect::centered(c.x, c.y, 160.0, 166.0), palette::PANEL);
-            Text::new("PAUSED", c.x, 122.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, &shared.font);
+            ui::panel(g, panel, palette::PANEL);
+            let title = if self.link.is_online() { "MENU" } else { "PAUSED" };
+            Text::new(title, c.x, first - 22.0).scale(2.0).color(palette::BRASS_LIGHT).center().draw(g, &shared.font);
             for (_, b) in &p.buttons {
                 b.draw(g, &shared.font);
             }
@@ -68,6 +75,27 @@ impl Table {
         if let Some(o) = &self.overlay {
             o.draw(shared, g);
         }
+    }
+
+    /// Online: the table code above the MENU button, and a badge while the
+    /// connection is down.
+    fn draw_connection(&self, shared: &Shared, g: &mut Graphics) {
+        let font = &shared.font;
+        if let Some(code) = self.link.room_code() {
+            Text::new(&format!("TABLE {code}"), 628.0, 322.0).color(palette::MUTED).anchor(1.0, 0.5).draw(g, font);
+        }
+        let line = match self.link.status() {
+            Status::Connected => return,
+            Status::Connecting | Status::Reconnecting => {
+                let dots = ".".repeat(1 + (shared.time * 3.0) as usize % 3);
+                format!("Reconnecting{dots}")
+            }
+            Status::Failed(why) => format!("{why} Leave from the menu."),
+        };
+        let w = font.width(&line) + 16.0;
+        g.set_color(palette::INK.with_alpha(0.75));
+        ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), 86.0, w, 15.0, 3.0);
+        Text::new(&line, CENTER.x, 93.5).color(palette::GOLD).center().draw(g, font);
     }
 
     fn draw_cards(&self, shared: &Shared, g: &mut Graphics) {

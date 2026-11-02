@@ -3,7 +3,7 @@
 //! highlight up and down the menu.
 //!
 //! When a game was saved, the menu leads with CONTINUE (and the saved score)
-//! above NEW GAME.
+//! above NEW GAME. PLAY ONLINE opens the lobby (`lobby.rs`).
 
 use std::f32::consts::PI;
 
@@ -16,6 +16,7 @@ use crate::palette;
 use crate::render::{VIEW_H, VIEW_W};
 use crate::savegame;
 use crate::scene::{InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
+use crate::scenes::lobby::Lobby;
 use crate::scenes::table::Table;
 use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
 use crate::sfx::Sound;
@@ -41,6 +42,7 @@ struct FanCard {
 enum Choice {
     Continue,
     Play,
+    Online,
     Options,
     Rules,
     Quit,
@@ -56,13 +58,15 @@ pub struct Title {
     focus: usize,
     /// The game in the save slot, offered as CONTINUE.
     saved: Option<Match>,
-    /// How far the jacks, logo and tagline sit above their usual place
-    /// ([`SAVED_LIFT`] when the menu has the extra CONTINUE row, else 0).
+    /// How far the jacks, logo and tagline sit above their usual place, to
+    /// make room for the menu ([`SAVED_LIFT`] with the extra CONTINUE row).
     lift: f32,
 }
 
-/// The header moves up this much to make room for CONTINUE and its score line.
-const SAVED_LIFT: f32 = 14.0;
+/// The header moves up this much to make room for the menu.
+const LIFT: f32 = 12.0;
+/// ...and this much when CONTINUE and its score line are there too.
+const SAVED_LIFT: f32 = 28.0;
 /// Space between the score line and the plaques above and below it.
 const SUMMARY_GAP: f32 = 6.0;
 /// How far a plaque's lip and drop shadow reach below its rect.
@@ -71,6 +75,11 @@ const PLAQUE_BELOW: f32 = 4.0;
 /// The line under CONTINUE: the saved game's score.
 fn saved_summary(m: &Match) -> String {
     format!("WE {} · THEY {} · PLAYING TO {}", m.scores[0], m.scores[1], m.target)
+}
+
+/// PLAY ONLINE: an amber plaque, warm like the lamp, so it stands apart from the rest.
+fn online_button(rect: Rect) -> Button {
+    Button::new("PLAY ONLINE", rect, palette::ORANGE, palette::ORANGE_DARK)
 }
 
 fn card_spring(v: f32) -> Spring {
@@ -83,7 +92,7 @@ fn card_spring(v: f32) -> Spring {
 impl Title {
     pub fn new() -> Self {
         let saved = savegame::load();
-        let lift = if saved.is_some() { SAVED_LIFT } else { 0.0 };
+        let lift = if saved.is_some() { SAVED_LIFT } else { LIFT };
         let jacks = [Suit::Clubs, Suit::Diamonds, Suit::Spades, Suit::Hearts];
         let cards = jacks
             .iter()
@@ -117,18 +126,20 @@ impl Title {
             // CONTINUE, its score line (SUMMARY_GAP below the plaque's lip and
             // shadow, and the same gap above NEW GAME), then the usual 24 px pitch.
             vec![
-                (Choice::Continue, Button::brass("CONTINUE", Rect::centered(CX, 206.0, w + 24.0, 26.0)).scaled(1.5)),
-                (Choice::Play, Button::red("NEW GAME", Rect::centered(CX, 256.0, w, 18.0))),
-                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 280.0, w, 18.0))),
-                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 304.0, w, 18.0))),
-                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 328.0, w, 18.0))),
+                (Choice::Continue, Button::brass("CONTINUE", Rect::centered(CX, 192.0, w + 24.0, 26.0)).scaled(1.5)),
+                (Choice::Play, Button::red("NEW GAME", Rect::centered(CX, 242.0, w, 18.0))),
+                (Choice::Online, online_button(Rect::centered(CX, 265.0, w, 18.0))),
+                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 288.0, w, 18.0))),
+                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 311.0, w, 18.0))),
+                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 334.0, w, 18.0))),
             ]
         } else {
             vec![
-                (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 226.0, w + 24.0, 26.0)).scaled(1.5)),
-                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 259.0, w, 18.0))),
-                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 283.0, w, 18.0))),
-                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 307.0, w, 18.0))),
+                (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 214.0, w + 24.0, 26.0)).scaled(1.5)),
+                (Choice::Online, online_button(Rect::centered(CX, 247.0, w, 18.0))),
+                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 271.0, w, 18.0))),
+                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 295.0, w, 18.0))),
+                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 319.0, w, 18.0))),
             ]
         };
         Title {
@@ -163,6 +174,7 @@ impl Title {
             // A new game leaves the save alone until it's saved over (or this
             // game finishes), so a stray click can't lose it.
             Choice::Play => return Transition::Switch(Box::new(Table::new(shared))),
+            Choice::Online => return Transition::Switch(Box::new(Lobby::new(shared))),
             Choice::Options => {
                 shared.sfx.play(Sound::Pop);
                 self.overlay = Some(Overlay::Options(Box::new(OptionsPanel::new())));

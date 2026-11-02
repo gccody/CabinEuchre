@@ -144,6 +144,21 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let server = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
     let players: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(3).clamp(1, 4);
+    // With a room code, only join it (as `players` guests): e.g. a table the game is hosting.
+    if let Some(code) = args.next() {
+        let guests: Vec<_> = (0..players)
+            .map(|i| {
+                let (server, code) = (server.clone(), code.clone());
+                thread::spawn(move || play(server, Some(code), format!("guest{i}"), None, None, None))
+            })
+            .collect();
+        for g in guests {
+            let (_, s) = g.join().expect("guest finished");
+            println!("guest final score {s:?}");
+        }
+        println!("netcheck: ok");
+        return;
+    }
 
     // A code nobody has: refused politely, over the socket.
     let mut bogus = connect(&format!("{server}/join/ZZZZZ"));

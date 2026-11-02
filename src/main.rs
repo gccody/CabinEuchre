@@ -14,6 +14,8 @@
 //! - `juice`    springs and easing curves for animation
 //! - `settings` persisted player options
 //! - `assets`   asset path resolution
+//! - `net`      where moves go: an in-process room (offline) or the online server
+//! - `platform` Steam (optional feature): names, invites, rich presence, join requests
 
 mod app;
 mod assets;
@@ -22,6 +24,7 @@ use euchre_core as euchre;
 mod juice;
 mod net;
 mod palette;
+mod platform;
 mod render;
 mod savegame;
 mod scene;

@@ -8,8 +8,12 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
 game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted) and
-an illustrated How to Play. Plays with
-mouse, keyboard, touchscreen or gamepad.
+an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad.
+
+**Online play** (cross-platform): host a table or join one with a 5-letter code; bots fill empty
+seats. Rooms run on a Cloudflare Worker with one Durable Object per table (`server/`). Steam builds
+(`--features steam`) add "Join Game" from the friends list and an invite button. Steam only passes
+room codes around, so Steam and phone players share tables.
 
 Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API questions. Its
 `references/api.md` is the API reference. Don't guess method names.
@@ -19,8 +23,10 @@ Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API question
 ```sh
 cargo run                      # debug build (deps are optimized, so it runs smoothly)
 cargo run --release
-cargo test                     # rules + AI, including 400 simulated AI-only games
-cargo clippy --all-targets     # keep it warning-free
+cargo test                     # rules + AI + online rooms (simulated players, drops, resyncs)
+cargo clippy --all-targets     # keep it warning-free (also with --features steam)
+cd server && npx wrangler dev  # the room server on ws://127.0.0.1:8787 (see server/README.md)
+cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3   # play a game against it
 LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   # render one frame to PNG and exit
 ```
 
@@ -37,8 +43,10 @@ the monitor's refresh rate.
 |---|---|
 | `EUCHRE_FIXED_DT=n` | every frame advances exactly n/60 s (1 for screenshots, 4 to fast-forward soak runs) |
 | `EUCHRE_SCENE=table\|continue\|options\|rules` | start in a game, resume the saved game, or on the title with a panel open |
+| `EUCHRE_SCENE=online\|host\|code` | the PLAY ONLINE menu, hosting a new table right away, or the code keyboard (with "KQJ" typed) |
+| `EUCHRE_SERVER=ws://...` | the room server (also read at build time; default `ws://127.0.0.1:8787`, i.e. `wrangler dev`) |
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
-| `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr |
+| `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down and logs the table code |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
 | `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file and the saved game, so screenshots don't depend on the player's options or a game they left |
@@ -54,7 +62,11 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/main.rs` | window config, `love2drs::run` |
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
-| `src/euchre/` | **pure rules, no love2drs imports**: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng` |
+| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
+| `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
+| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token) |
+| `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect`, the invite dialog, join requests (`+connect CODE` or the overlay). No-ops without it |
+| `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, seats, DEAL, INVITE, LEAVE). Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
@@ -73,16 +85,28 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 
 ### How the table works
 
-- `Match`/`Round` in `src/euchre` are the source of truth. The scene only calls
-  `Match::apply(seat, action)` and `Match::advance()` (not the `Round` methods: the `Match`
-  versions log each step so the hand can be saved).
+- **Every game runs in a `Room`** (`core/src/room.rs`), offline or online. The room holds the real
+  `Match`, plays the bots instantly, and sends each player messages written from their point of
+  view (they're always seat 0, their team is team 0). The table never sees the real match: it
+  keeps a `Mirror`, which has your exact hand and everything public, while the other hands and the
+  kitty are guesses. When a seat plays a card the mirror had guessed elsewhere, the two hidden
+  cards trade places (`Mirror::reveal` returns the swaps, and `Table::swap_cards` swaps their
+  sprites; both are face down, so nothing visibly changes).
+- Your moves go through `Mirror::act` (the same check the room makes), then `link.send(Act)`.
+  Other seats' moves arrive as `ServerMsg::Acted` and wait in `pending` until `drive()` is idle;
+  bots get a "thinking" `Wait` first, people don't. A deal arrives as `Deal`; a reconnect or a
+  resync as `Sync` (the whole hand), laid out like a resumed save. Anything that doesn't fit the
+  mirror triggers `request_resync()`.
+- Offline: `net::LocalTable` wraps a room with you plus three bots. `Table::new` and
+  `Table::resume` build one; saving writes the room's `Match`.
 - Every card has a `Place` (pile, up card, hand, trick, won pile, kitty, sitting out). `layout.rs`
   turns places into target positions each frame and per-card springs chase them, so cards never
   snap. Change a card's place with `Table::move_card`, which also bumps its draw order.
-- Pacing goes through a queue of `Cue`s (`Wait`, `Deal`, `AiAct`, `CollectTrick`, ...). When the
-  queue is empty, `drive()` looks at the round's phase and schedules the next step, or sets up
-  the human's prompt and waits for input.
-- `perform()` applies an action and mirrors it visually (bubbles, trump toast, card moves).
+- Pacing goes through a queue of `Cue`s (`Wait`, `Deal`, `Remote`, `CollectTrick`, ...). When the
+  queue is empty, `drive()` looks at the mirror's phase and schedules the next step, takes the
+  next message from the room, or sets up your prompt and waits for input.
+- `perform()` (your move) and `perform_remote()` (from the room) both end in `show_action()`,
+  which mirrors the move visually (bubbles, trump toast, card moves).
 - Saving: a save is the RNG state at the start of the current hand plus every step since.
   Loading re-deals and replays through the rules, so a bad file is rejected, never half-loaded.
   "SAVE & QUIT" (pause menu) and closing the window mid-game write it (`Scene::suspend`); game
@@ -90,6 +114,25 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   works out every card's place from the round (`settled_places`) and deals them back out. To
   screenshot a resume, point `APPDATA` at a scratch folder holding `Euchre\savegame.txt` and use
   `EUCHRE_SCENE=continue` (screenshot mode exits without `Game::quit`, so it never saves).
+
+### Online play
+
+- Protocol, room rules and hidden information live in `core/` and are covered by
+  `online_tests.rs`. Never send a player another seat's cards: the room's `Shown::of` hides the
+  dealer's discard from everyone but the dealer.
+- Changing a message's shape means bumping `protocol::PROTOCOL_VERSION`.
+- The room server (`server/src/lib.rs`) only moves messages, saves the room after every change
+  (it may hibernate at any moment) and keeps one alarm for turn timeouts (45 s; 15 s while
+  disconnected) and room expiry. Keep it timer-free otherwise: bots move instantly there, and the
+  games add the pauses.
+- Online tables differ only a little: the result banner moves on by itself after 7 s, PLAY AGAIN
+  asks the room for a new game, the pause menu says LEAVE TABLE (a bot takes the seat) and adds
+  INVITE FRIENDS on Steam, and the table code shows above MENU.
+- Steam: `cargo run --features steam` needs `steam_api64.dll` (copied by `steamworks-sys` into
+  `target/<profile>/build/steamworks-sys-*/out/`) next to the exe and a `steam_appid.txt`
+  holding `480` (Valve's test app) in the working directory while developing. The `#AtTable`
+  rich presence token is in `steam/rich_presence_english.vdf`; upload it on the app's Steamworks
+  page. The feature only builds for Windows, macOS and Linux; mobile builds use codes.
 
 ### Input
 
@@ -163,6 +206,10 @@ other game's) sprites, shaders, sounds or other files.
   `assets/music/theme.ogg` exists.
 
 ## Ideas for later
+
+- Public quick-match (an extra Durable Object as a queue), once enough people play online.
+- Verified identities (Steam auth tickets checked by the server) if rankings ever matter.
+- Android/iOS packaging in love2drs (winit and wgpu support both); the game side is ready.
 
 - Smarter AI (card counting for voids, better lone-hand judgment), difficulty levels.
 - Optional house rules: defending alone, "farmer's hand", no-trump.
