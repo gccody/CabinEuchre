@@ -83,16 +83,27 @@ impl View {
         View { offset, scale, visible: DESIGN_RECT }
     }
 
-    /// Phone: 640x360 as large as it fits inside the margins, with the canvas
-    /// covering the whole screen.
-    fn fit_safe(window_w: f32, window_h: f32, m: Margins) -> (Self, Rect) {
-        let Margins { side, top, bottom } = m;
+    /// Phone: how large 640x360 can be inside the margins. `reserved` includes
+    /// space for bars that aren't showing yet, so the size never changes when they do.
+    fn safe_scale(window_w: f32, window_h: f32, reserved: Margins) -> f32 {
+        let Margins { side, top, bottom } = reserved;
         let (usable_w, usable_h) = ((window_w - side * 2.0).max(1.0), (window_h - top - bottom).max(1.0));
-        let scale = (usable_w / VIEW_W as f32).min(usable_h / VIEW_H as f32);
-        let offset = vec2(
-            ((window_w - VIEW_W as f32 * scale) / 2.0).floor(),
-            (top + (usable_h - VIEW_H as f32 * scale) / 2.0).floor(),
-        );
+        (usable_w / VIEW_W as f32).min(usable_h / VIEW_H as f32)
+    }
+
+    /// Phone: where the top of 640x360 goes: centered in the space that's really
+    /// clear right now, so with no bar showing it's centered on the screen.
+    fn safe_y(window_h: f32, clear: Margins, scale: f32) -> f32 {
+        let usable_h = (window_h - clear.top - clear.bottom).max(1.0);
+        (clear.top + (usable_h - VIEW_H as f32 * scale) / 2.0).floor()
+    }
+
+    /// Phone: the design space at this scale and height, with the canvas covering
+    /// the whole screen. The returned bounds stay out of the `reserved` margins.
+    fn placed(window_w: f32, window_h: f32, reserved: Margins, scale: f32, y: f32) -> (Self, Rect) {
+        let Margins { side, top, bottom } = reserved;
+        let (usable_w, usable_h) = ((window_w - side * 2.0).max(1.0), (window_h - top - bottom).max(1.0));
+        let offset = vec2(((window_w - VIEW_W as f32 * scale) / 2.0).floor(), y);
         let visible = Rect::new(-offset.x / scale, -offset.y / scale, window_w / scale, window_h / scale);
         let bounds = Rect::new((side - offset.x) / scale, (top - offset.y) / scale, usable_w / scale, usable_h / scale);
         (View { offset, scale, visible }, bounds)
@@ -139,9 +150,14 @@ impl Margins {
 }
 
 /// Android's gesture bar comes and goes (it's hidden at launch, and appears
-/// with the first touch), so its height is set aside from the start.
+/// with the first touch), so its height is set aside from the start. Previews
+/// can do the same with `EUCHRE_RESERVE=24`.
 fn minimum_margins() -> Margins {
-    let bottom = if cfg!(target_os = "android") { 24.0 } else { 0.0 };
+    let bottom = if cfg!(target_os = "android") {
+        24.0
+    } else {
+        std::env::var("EUCHRE_RESERVE").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0)
+    };
     Margins { bottom, ..Margins::default() }
 }
 
@@ -157,20 +173,51 @@ fn preview_safe(window_w: f32, window_h: f32) -> (f32, f32, f32, f32) {
     }
 }
 
-/// The window size [`Renderer::margins`] were found for, and the margins.
-type SeenMargins = ((f32, f32), Margins);
+/// Where a phone's view sits, remembered from frame to frame.
+#[derive(Debug, Clone, Copy, Default)]
+struct Placement {
+    /// The window size the rest was found for.
+    window: (f32, f32),
+    /// The bars and cutouts seen so far (not counting space set aside for later).
+    clear: Margins,
+    /// The view's height in the window. `None` until there's a window to fit.
+    y: Option<f32>,
+}
 
-/// The view for a window of this size, on this device. On a phone the margins
-/// only ever grow while the window keeps its size, so bars that come and go
-/// don't make the whole table jump.
-fn view_for(w: f32, h: f32, window: &Window, seen: &mut SeenMargins) -> View {
+impl Placement {
+    /// Takes in this frame's margins, which only ever grow while the window keeps
+    /// its size, so bars that come and go don't keep moving the game.
+    fn see(&mut self, window: (f32, f32), margins: Margins) {
+        if self.window == window {
+            self.clear = self.clear.at_least(margins);
+        } else {
+            *self = Placement { window, clear: margins, y: None };
+        }
+    }
+
+    /// Glides toward `target`, so a bar appearing moves the game smoothly.
+    fn glide(&mut self, target: f32, dt: f32) -> f32 {
+        let y = match self.y {
+            Some(y) if (y - target).abs() >= 0.5 => approach(y, target, 14.0, dt),
+            _ => target,
+        };
+        self.y = Some(y);
+        y.floor()
+    }
+}
+
+/// The view for a window of this size, on this device.
+fn view_for(w: f32, h: f32, window: &Window, placement: &mut Placement, dt: f32) -> View {
     if !device::mobile() {
         return View::fit(w, h);
     }
     let safe = if device::NATIVE_MOBILE { window.safe_area() } else { preview_safe(w, h) };
-    let margins = Margins::from_safe(w, h, safe).at_least(minimum_margins());
-    *seen = if seen.0 == (w, h) { ((w, h), seen.1.at_least(margins)) } else { ((w, h), margins) };
-    let (view, bounds) = View::fit_safe(w, h, seen.1);
+    placement.see((w, h), Margins::from_safe(w, h, safe));
+    let clear = placement.clear;
+    let reserved = clear.at_least(minimum_margins());
+    let scale = View::safe_scale(w, h, reserved);
+    let y = placement.glide(View::safe_y(h, clear, scale), dt);
+    let (view, bounds) = View::placed(w, h, reserved, scale, y);
     set_bounds(bounds);
     view
 }
@@ -183,14 +230,16 @@ pub struct Renderer {
     /// 0 = post-process off, 1 = full effect. Driven by the Atmosphere option.
     pub atmosphere: f32,
     view: View,
-    margins: SeenMargins,
+    placement: Placement,
+    /// `time` at the last [`Renderer::update`].
+    last_time: f32,
 }
 
 impl Renderer {
     pub fn new(g: &mut Graphics, window: &Window) -> Result<Self> {
         let (w, h) = g.dimensions();
-        let mut margins = ((w, h), Margins::default());
-        let view = view_for(w, h, window, &mut margins);
+        let mut placement = Placement::default();
+        let view = view_for(w, h, window, &mut placement, 0.0);
         let (cw, ch) = canvas_size(view, g.dpi_scale());
         Ok(Renderer {
             canvas: new_canvas(g, cw, ch),
@@ -199,7 +248,8 @@ impl Renderer {
             pixel: g.new_shader(include_str!("shaders/pixel.wgsl"))?,
             atmosphere: 1.0,
             view,
-            margins,
+            placement,
+            last_time: 0.0,
         })
     }
 
@@ -210,7 +260,9 @@ impl Renderer {
     /// Call once per frame from `update` before anything reads [`Renderer::view`].
     pub fn update(&mut self, g: &Graphics, window: &Window, time: f32) {
         let (w, h) = g.dimensions();
-        self.view = view_for(w, h, window, &mut self.margins);
+        let dt = (time - self.last_time).max(0.0);
+        self.last_time = time;
+        self.view = view_for(w, h, window, &mut self.placement, dt);
         let (cw, ch) = canvas_size(self.view, g.dpi_scale());
         let (cw, ch) = (cw as f32, ch as f32);
         self.background.send(0, [time, cw, ch, 0.0]);
@@ -278,4 +330,68 @@ fn new_canvas(g: &mut Graphics, w: u32, h: u32) -> Canvas {
     // Linear sampling is required by the lamplight shader's sharp-bilinear upscale.
     canvas.set_filter(FilterMode::Linear);
     canvas
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A phone in landscape with 24 units set aside at the bottom, as on Android.
+    const W: f32 = 1280.0;
+    const H: f32 = 590.0;
+    const RESERVED: Margins = Margins { side: 0.0, top: 0.0, bottom: 24.0 };
+
+    fn center_y(clear: Margins) -> f32 {
+        let scale = View::safe_scale(W, H, RESERVED);
+        View::safe_y(H, clear, scale) + VIEW_H as f32 * scale / 2.0
+    }
+
+    #[test]
+    fn no_bar_showing_centers_on_the_screen() {
+        assert!((center_y(Margins::default()) - H / 2.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn a_bar_showing_centers_above_it() {
+        assert!((center_y(RESERVED) - (H - RESERVED.bottom) / 2.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn the_size_stays_the_same_when_the_bar_appears() {
+        let scale = View::safe_scale(W, H, Margins::default().at_least(RESERVED));
+        assert_eq!(scale, View::safe_scale(W, H, RESERVED.at_least(RESERVED)));
+    }
+
+    #[test]
+    fn bounds_stay_out_of_the_reserved_space_wherever_the_view_sits() {
+        let scale = View::safe_scale(W, H, RESERVED);
+        for y in [0.0, 12.0] {
+            let (view, bounds) = View::placed(W, H, RESERVED, scale, y);
+            let bottom = view.offset.y + (bounds.y + bounds.h) * scale;
+            assert!((bottom - (H - RESERVED.bottom)).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn a_bar_appearing_glides_and_then_settles() {
+        let mut p = Placement { y: Some(12.0), ..Placement::default() };
+        let first = p.glide(0.0, 1.0 / 60.0);
+        assert!(first > 0.0 && first < 12.0, "moves part of the way: {first}");
+        for _ in 0..120 {
+            p.glide(0.0, 1.0 / 60.0);
+        }
+        assert_eq!(p.y, Some(0.0));
+    }
+
+    #[test]
+    fn margins_only_grow_until_the_window_changes() {
+        let mut p = Placement::default();
+        p.see((W, H), RESERVED);
+        p.see((W, H), Margins::default());
+        assert_eq!(p.clear, RESERVED);
+        p.y = Some(5.0);
+        p.see((H, W), Margins::default());
+        assert_eq!(p.clear, Margins::default());
+        assert_eq!(p.y, None, "a new window size places the view right away");
+    }
 }

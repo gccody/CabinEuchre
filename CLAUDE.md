@@ -36,7 +36,7 @@ cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3   # play a 
 LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   # render one frame to PNG and exit
 cargo love2drs android run -p cabin-euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
 cargo love2drs ios build -p cabin-euchre                  # on a Mac: builds the .app for the simulator
-EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,24 cargo run   # preview the phone layouts on the desktop
+EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,0 EUCHRE_RESERVE=24 cargo run   # preview the phone layouts on the desktop, like Android with no bar showing
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
@@ -45,7 +45,7 @@ slider's strength when turned back on) and F11 toggles fullscreen.
 
 The README's screenshots live in `docs/screenshots/`. They're seed 15 at frames like 340 (bidding) and
 1420 (a trick), with `EUCHRE_DEFAULT_SETTINGS=1 EUCHRE_FIXED_DT=1`. Phone shots use the preview command
-above, and the tablet shot uses `EUCHRE_WINDOW=1180x820 EUCHRE_SAFE=0,24,0,20`.
+above, and the tablet shot uses `EUCHRE_WINDOW=1180x820 EUCHRE_SAFE=0,0,0,0 EUCHRE_RESERVE=24`.
 
 ### Debug switches (environment variables)
 
@@ -65,7 +65,8 @@ the monitor's refresh rate.
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file, the saved game and the remembered online seat, so screenshots don't depend on the player's options or a game they left |
 | `EUCHRE_MOBILE=1` | use the phone and tablet layouts on the desktop (read from the environment only) |
 | `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |
-| `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units) |
+| `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units). A bottom of 24 is a gesture bar on screen, and the game centers above it |
+| `EUCHRE_RESERVE=n` | with `EUCHRE_MOBILE`, set aside n units at the bottom for a bar that isn't showing, as Android always does with 24 |
 
 These only work in debug builds, except `EUCHRE_SERVER`, which any build reads. Nothing can set
 environment variables on a phone, so debug builds there also read `KEY=value` lines
@@ -104,7 +105,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/settings.rs` | options persisted to `%APPDATA%\CabinEuchre\settings.txt` (or `~/.config/cabin-euchre/`) |
 | `src/savegame.rs` | the save slot, `savegame.txt` in the same folder: read, write (atomically), forget a finished game |
 | `src/assets.rs` | asset path lookup (cwd, crate root, exe dir) |
-| `tools/make_icon.py` | paints `assets/icon.png` (`python tools/make_icon.py`, needs Pillow). Keep its outer edge one flat color: Android fills around the icon with the corner color |
+| `tools/make_icon.py` | paints `assets/icon.png` and `assets/icon.ico` (`python tools/make_icon.py`, needs Pillow). Keep its outer edge one flat color: Android fills around the icon with the corner color |
+| `build.rs` | Windows only: embeds `assets/icon.ico` and the game's name in the `.exe` (needs `rc.exe` from the Windows SDK) |
 
 ### How the table works
 
@@ -215,8 +217,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   safe area in design coordinates. It can reach outside 640x360, so edge-anchored things (hand, MENU,
   score pad, trump medallion) use it. Anything drawn across the whole screen, like `ui::dim_screen`, has
   to cover more than 640x360 too.
-- **Margins only grow** while the window keeps its size, and Android starts with a 24 dp bottom floor:
-  its gesture bar appears after the first touch, and the table must not jump when it does.
+- **Margins only grow** while the window keeps its size, and Android always sets aside 24 dp at the bottom:
+  its gesture bar appears after the first touch, and the game's size must not change when it does. The
+  reserved space only affects the size and `bounds()`. The view centers in what's really clear
+  (`View::safe_y`), so with no bar showing it's centered on the screen, and it glides up if one appears.
 - **Touch targets** are about 40 design px tall plus `ui::TOUCH_SLOP`. One design px is roughly one dp.
 - **Lifecycle.** `Scene::background` runs when the app is sent away: offline games save, and online games
   keep their seat (the room's disconnect timer applies). Android's back gesture arrives as `Key::Escape`;
