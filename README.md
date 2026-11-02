@@ -1,62 +1,111 @@
-# Euchre
+<p align="center">
+  <img src="docs/screenshots/pc-title.png" alt="The Cabin Euchre title screen: a fan of four jacks above a chunky pixel-art logo on a teal felt table" width="820">
+</p>
 
-The classic four-player trick-taking card game, dealt on a lamp-lit cabin table: chunky pixel
-art, walnut and brass, a felt mat and a pencil score pad, with springy cards and punchy sounds.
-Built in Rust on [love2drs](https://github.com/gccody/Love2DRS).
+<h1 align="center">Cabin Euchre</h1>
 
-You and your partner (Benny, across the table) play against Rosa and Jules. Pick trump, take
-tricks, euchre the other team, first to 10 wins.
+<p align="center">
+  <strong>Pull up a chair. Lamp's on, cards are out, and Benny needs a partner.</strong><br>
+  Classic euchre on a lamp-lit cabin table, on your PC, phone or tablet.
+</p>
 
-## Run
+<p align="center">
+  <em>Coming to Steam, the App Store and Google Play.</em>
+</p>
+
+---
+
+## The card game of the Great Lakes, the way it's meant to feel
+
+Euchre belongs on a kitchen table at the lake, with the wood stove going and someone keeping score
+on the back of an envelope. Cabin Euchre brings that table to you: worn walnut, a felt mat, a lamp
+swaying overhead and a pencil score pad with real tally marks.
+
+Every card has weight. They hop when they flip, lean toward your cursor and snap down on the felt
+with a good, punchy sound. It's lively, it's cozy, and it's very hard to play just one more hand.
+
+<p align="center">
+  <img src="docs/screenshots/pc-bidding.png" alt="Bidding on PC: order up the ten of clubs, pass, or go alone" width="820">
+</p>
+
+## The real rules, not a watered-down version
+
+- **Right and left bowers**, ordering up, naming trump and all the rest
+- **Go alone** when your hand is too good to share
+- **Stick the dealer**, on or off
+- **Play to 5, 7 or 10**, and watch the points tick up on the score pad
+
+New to euchre? The illustrated **How to Play** walks you through it. Then Benny, your partner across
+the table, will help you take on Rosa and Jules.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/pc-trick.png" alt="A trick on the table, with the ace of spades glowing as the winner"></td>
+    <td><img src="docs/screenshots/pc-victory.png" alt="The victory banner: you and Benny win the game"></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Trump takes the trick</em></td>
+    <td align="center"><em>Bragging rights secured</em></td>
+  </tr>
+</table>
+
+## Bring your friends to the table
+
+Host a table, share the 6-letter code, and everyone sits right down. Tables are private unless you
+say otherwise, and bots keep any empty seats warm, so two of you can take on the house or fill all
+four chairs.
+
+**PC and mobile players share the same tables.** Your cousin on the couch with a phone and your
+buddy on Steam can sit down together. On Steam, you can also send invites, and friends can ask to
+join right from their friends list.
+
+<p align="center">
+  <img src="docs/screenshots/pc-lobby.png" alt="An online lobby showing a six-letter table code, seats and a DEAL button" width="820">
+</p>
+
+## A full table in your pocket
+
+Cabin Euchre isn't a PC game squeezed onto a small screen. Phones and tablets get their own layouts,
+with big buttons for your thumbs and a table that runs edge to edge.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/phone-title.png" alt="The title screen on a phone"></td>
+    <td><img src="docs/screenshots/phone-bidding.png" alt="Bidding on a phone, with large buttons"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/phone-trick.png" alt="A trick being played on a phone"></td>
+    <td><img src="docs/screenshots/phone-lobby.png" alt="The online lobby on a phone"></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/tablet-bidding.png" alt="Bidding on a tablet" width="620">
+</p>
+
+## Play it your way
+
+- **Mouse, keyboard, touchscreen or gamepad**, with rumble on controllers
+- **Save and quit** any time, then pick up right where you left off
+- **Set your own pace** with relaxed, normal and fast game speeds
+- **Windows, macOS, Linux, iOS and Android**
+
+---
+
+<p align="center">
+  <strong>Cabin Euchre</strong><br>
+  The lamp's on. Deal me in.
+</p>
+
+<details>
+<summary>Build it yourself</summary>
+
+You'll need Rust 1.88 or newer.
 
 ```sh
-cargo run --release      # or plain `cargo run`; dependencies are optimized either way
+cargo run --release
 ```
 
-Requires Rust 1.88+.
+Cabin Euchre is written in Rust on the [love2drs](https://github.com/gccody/Love2DRS) framework.
 
-## How to play
-
-The in-game **How to Play** screen covers the rules. In short: only 9 through A are used; the jack
-of trump (right bower) is the best card and the other jack of the same color (left bower) is
-second best and counts as trump. Players take turns ordering up the turned card or naming trump,
-then must follow suit when they can. Makers need 3 of 5 tricks: 1 point, a march (all 5) is 2,
-a lone march is 4, and getting euchred gives the other team 2.
-
-### Controls
-
-| input | action |
-|---|---|
-| click a card, or **1-6** | play (or discard) that card |
-| bid buttons, or **O** / **P** / **A** / **C D S H** | order up / pass / alone / name a suit |
-| **Space** / **Enter** | continue after a hand |
-| **Esc** | pause menu (resume, options, how to play, main menu) |
-| **F2** | toggle the lamplight effect (set its strength with the Atmosphere slider in Options) |
-| **F11** | toggle fullscreen |
-
-**Options:** volume, music, atmosphere, game speed (relaxed / normal / fast), points to win
-(5 / 7 / 10), stick the dealer, fullscreen. Settings are saved to `%APPDATA%\Euchre\settings.txt`
-(or `~/.config/euchre/settings.txt`).
-
-## Assets
-
-Everything on screen and in the speakers is generated in code: the pixel font, the card faces and
-backs, every sound effect and the music loop. Optional override:
-
-| path | effect |
-|---|---|
-| `assets/music/theme.ogg` | replaces the synthesized background music |
-
-## Tests
-
-```sh
-cargo test        # rules, bowers, follow-suit edge cases, scoring, and 400 simulated AI games
-cargo clippy      # kept warning-free
-```
-
-## Developing against a local love2drs
-
-Uncomment the `[patch]` section in `Cargo.toml` to use a local checkout of the framework instead
-of the GitHub version.
-
-See [CLAUDE.md](CLAUDE.md) for architecture, conventions, debug switches and the art direction.
+</details>
