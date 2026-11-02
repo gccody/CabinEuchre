@@ -590,7 +590,9 @@ fn main() -> love2drs::Result {
 
 ## 10. Text input field
 
-Use `text_input` for characters (layout/IME aware) and `key_pressed` for editing keys.
+Use `text_input` for characters (layout/IME aware) and `key_pressed` for editing keys. On phones, also call
+`ctx.keyboard.set_screen_keyboard(true)` when the field is tapped, `set_screen_keyboard(false)` when it's
+done, and keep the field inside `ctx.window.safe_area()`, which leaves out the keyboard.
 
 ```rust
 use love2drs::prelude::*;
@@ -719,3 +721,128 @@ On Windows PowerShell: `$env:LOVE2DRS_SCREENSHOT="target/shot.png"; cargo run --
 This requires a GPU (or a software adapter such as Mesa llvmpipe / WARP) and a display session.
 On Linux CI, wrap the command in `xvfb-run`. Look at the PNG, or compare it against a
 reference image, to verify rendering.
+
+## 14. Running on Android and iOS
+
+```toml
+# Cargo.toml
+[package.metadata.love2drs]
+app_id = "com.example.mygame"
+name = "My Game"
+assets = ["assets"]        # packaged at the same path, so new_image("assets/x.png") still works
+orientation = "landscape"  # landscape, portrait or any
+icon = "assets/icon.png"   # square PNG, 1024x1024 is best
+```
+
+```rust
+use love2drs::prelude::*;
+
+const SAVE_FILE: &str = "save.txt"; // relative paths are in the save directory on mobile
+
+struct MyGame {
+    score: u32,
+}
+
+impl Game for MyGame {
+    fn draw(&mut self, ctx: &mut Context) {
+        // A phone's window has no fixed size, and part of it may be covered.
+        let (x, y, w, _h) = ctx.window.safe_area();
+        let g = &mut ctx.graphics;
+        g.printf(&format!("Score: {}", self.score), x, y + 12.0, w, Align::Center);
+    }
+
+    fn touch_pressed(&mut self, _ctx: &mut Context, _id: TouchId, _x: f32, _y: f32) {
+        self.score += 1;
+    }
+
+    // The OS may end the app after this without telling it.
+    fn suspended(&mut self, _ctx: &mut Context) {
+        let _ = std::fs::write(SAVE_FILE, self.score.to_string());
+    }
+
+    // Android's back gesture arrives as Escape.
+    fn key_pressed(&mut self, ctx: &mut Context, key: Key, _repeat: bool) {
+        if key == Key::Escape {
+            ctx.quit();
+        }
+    }
+}
+
+fn main() -> love2drs::Result {
+    love2drs::run(Conf::new("My Game"), |_ctx| {
+        let score = std::fs::read_to_string(SAVE_FILE)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .unwrap_or(0);
+        Ok(MyGame { score })
+    })
+}
+
+love2drs::android_main!(main);
+```
+
+```sh
+cargo install --git https://github.com/gccody/Love2DRS cargo-love2drs
+cargo love2drs android run   # phone or running emulator
+cargo love2drs ios run       # Simulator, on a Mac
+```
+
+If the game acts when a finger lifts, a touch the OS takes away (back gesture, incoming call, notification
+shade, losing focus) mustn't count:
+
+```rust
+impl Game for MyGame {
+    fn touch_pressed(&mut self, _ctx: &mut Context, id: TouchId, x: f32, y: f32) {
+        self.pressed = Some((id, vec2(x, y)));
+    }
+
+    fn touch_released(&mut self, _ctx: &mut Context, id: TouchId, x: f32, y: f32) {
+        if self.pressed.take().is_some_and(|(pressed, _)| pressed == id) {
+            self.tap(vec2(x, y));
+        }
+    }
+
+    // The player didn't let go. No touch_released follows.
+    fn touch_cancelled(&mut self, _ctx: &mut Context, _id: TouchId, _x: f32, _y: f32) {
+        self.pressed = None;
+    }
+}
+```
+
+Mouse-only games do the same with `mouse_cancelled`.
+
+## 15. Packaging for the stores
+
+```toml
+[package.metadata.love2drs]
+app_category = "game"     # the default; keeps a locked orientation working on Android 16 tablets
+privacy_manifest = "ios/PrivacyInfo.xcprivacy"  # needed if the game collects data, see below
+```
+
+Google Play takes an `.aab`. `package` always builds optimized, for arm64 and x86_64 unless `--abi` says
+otherwise. It needs [bundletool](https://github.com/google/bundletool/releases) and a JDK:
+
+```sh
+LOVE2DRS_KEYSTORE_PASS=... cargo love2drs android package \
+    --bundletool bundletool-all.jar --keystore upload.jks --key-alias upload
+```
+
+The bundle lands in `target/love2drs/android/<name>-release.aab`, with native debug symbols for Google Play
+inside it. Without `--keystore` it's signed with the debug key, which Google Play rejects. Set
+`LOVE2DRS_KEY_PASS` if the key's password differs from the keystore's, and `BUNDLETOOL_JAR` instead of
+`--bundletool` if that's easier.
+
+The App Store takes an `.ipa`. On a Mac with a distribution certificate and an App Store provisioning profile:
+
+```sh
+cargo love2drs ios package --identity "Apple Distribution: Me (TEAMID)" --profile game.mobileprovision
+```
+
+This writes `<name>.ipa` and `<name>.app.dSYM` to `target/love2drs/ios/iphoneos/release/`. Upload the `.ipa` with
+Transporter or `xcrun altool`, and keep the `.dSYM` for reading crash reports. Without `--identity` the result is
+unsigned and needs signing before upload.
+
+The tool writes the `DT*` keys App Store Connect checks and a `PrivacyInfo.xcprivacy`. The one it makes declares no
+tracking, no data collection, and the required-reason system APIs it finds in the executable, with the reason
+for ordinary use inside an app. That's only a starting point: if the game collects data or has analytics, write
+your own and set `privacy_manifest`, and keep it consistent with what you tell App Store Connect.

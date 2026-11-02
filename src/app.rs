@@ -447,6 +447,16 @@ impl Game for App {
         self.apply(ctx, t);
     }
 
+    /// The OS took the finger (a back gesture, a call, losing focus). It isn't a tap and no release
+    /// follows. Anything it was dragging lets go next frame, when the pointer is gone. Android reuses
+    /// finger ids, so forget this one or the next finger looks like a second one resting on the screen.
+    fn touch_cancelled(&mut self, _ctx: &mut Context, id: TouchId, _x: f32, _y: f32) {
+        self.last_touch = Some(Instant::now());
+        if self.primary_touch == Some(id) {
+            self.primary_touch = None;
+        }
+    }
+
     fn gamepad_added(&mut self, ctx: &mut Context, _id: GamepadId) {
         self.shared.gamepad = ctx.gamepad.is_connected();
     }

@@ -181,7 +181,9 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   `Button::focused` / `Slider::focused`; focus only draws when `shared.focus_visible()`.
 - Touch acts on release (`Scene::touch_released`, defaulting to `mouse_pressed`), so you can
   slide along your hand before lifting to play. Sliders start dragging in `touch_pressed`.
-  The app ignores mouse events for a moment after any touch: the OS emulates them.
+  The app ignores mouse events for a moment after any touch: the OS emulates them. A touch the OS
+  takes away (back gesture, call, losing focus) arrives as `touch_cancelled`, not a release, so it
+  never taps. Scenes don't hear about it: the pointer just goes away, which ends a slider drag.
 - Rumble: `shared.rumble(strength, seconds)`. It plays only on a gamepad with the Rumble option
   on, after the player last pressed a controller button (mouse motion alone does not stop it).
   Save it for the same big moments as screen shake. Smaller pulses go through `shared.buzz(delay,
@@ -214,8 +216,18 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - **No quit or fullscreen on mobile:** the title has no QUIT button and Options has no Fullscreen row.
 - **Shipping builds need `EUCHRE_SERVER` set at build time.** The default is `ws://127.0.0.1:8787`, and
   a phone has no room server on localhost.
-- Emulator notes: the Android emulator needs a GPU mode that gives Vulkan (an AVD with `hw.gpu.enabled=no`
-  crashes at startup on GLES). To reach a local `wrangler dev`, use `adb reverse tcp:8787 tcp:8787`.
+- **Store builds:** `cargo love2drs android package -p euchre --keystore upload.jks --key-alias upload
+  --bundletool bundletool-all.jar` makes an `.aab` (password in `LOVE2DRS_KEYSTORE_PASS`), and on a Mac
+  `cargo love2drs ios package -p euchre --identity NAME --profile PATH` makes an `.ipa` and `.dSYM`.
+  The iOS privacy manifest is generated and declares no data collection. If the App Store answers need
+  to say otherwise (online play sends a name and an address), write one and set `privacy_manifest`.
+- **Sound** is left to the framework: it pauses in the background and after an interruption, and it comes back
+  by itself. On iOS it mixes with the player's music and obeys the silent switch (`AudioSession::Ambient`).
+- **Graphics:** Android uses Vulkan where there's a driver and OpenGL ES 3 otherwise. To test GLES, start an
+  emulator with `-gpu swiftshader_indirect -feature -Vulkan`. There, `textureDimensions` returns 0 (the GLSL
+  is correct, so this looks like the emulator's translator; not yet seen on a real device), so `pixel.wgsl` falls
+  back to plain filtering and sprites look soft. Compare against Vulkan before blaming a change for blurry art.
+- Emulator notes: to reach a local `wrangler dev`, use `adb reverse tcp:8787 tcp:8787`.
 
 ### Rules of the road
 

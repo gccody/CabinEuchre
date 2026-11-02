@@ -60,11 +60,13 @@ fn key_released(&mut self, ctx: &mut Context, key: Key)
 fn text_input(&mut self, ctx: &mut Context, text: &str)        // typed text, layout/IME aware
 fn mouse_pressed(&mut self, ctx: &mut Context, x: f32, y: f32, button: MouseButton)
 fn mouse_released(&mut self, ctx: &mut Context, x: f32, y: f32, button: MouseButton)
+fn mouse_cancelled(&mut self, ctx: &mut Context, x: f32, y: f32, button: MouseButton) // mobile: the OS took the finger acting as the mouse; not a click, no mouse_released follows
 fn mouse_moved(&mut self, ctx: &mut Context, x: f32, y: f32, dx: f32, dy: f32)
 fn wheel_moved(&mut self, ctx: &mut Context, x: f32, y: f32)   // y > 0 = away from user
 fn touch_pressed(&mut self, ctx: &mut Context, id: TouchId, x: f32, y: f32)
 fn touch_moved(&mut self, ctx: &mut Context, id: TouchId, x: f32, y: f32, dx: f32, dy: f32)
-fn touch_released(&mut self, ctx: &mut Context, id: TouchId, x: f32, y: f32) // also on cancel
+fn touch_released(&mut self, ctx: &mut Context, id: TouchId, x: f32, y: f32) // the finger was really lifted
+fn touch_cancelled(&mut self, ctx: &mut Context, id: TouchId, x: f32, y: f32) // the OS took it, or focus was lost: don't act on it
 fn gamepad_added(&mut self, ctx: &mut Context, id: GamepadId)  // also for pads present at startup
 fn gamepad_removed(&mut self, ctx: &mut Context, id: GamepadId)
 fn gamepad_pressed(&mut self, ctx: &mut Context, id: GamepadId, button: GamepadButton)
@@ -73,6 +75,9 @@ fn gamepad_axis(&mut self, ctx: &mut Context, id: GamepadId, axis: GamepadAxis, 
 fn resize(&mut self, ctx: &mut Context, width: f32, height: f32) // logical pixels
 fn focus(&mut self, ctx: &mut Context, focused: bool)
 fn file_dropped(&mut self, ctx: &mut Context, path: std::path::PathBuf)
+fn suspended(&mut self, ctx: &mut Context)    // Android/iOS: went to the background, so save now
+fn resumed(&mut self, ctx: &mut Context)      // Android/iOS: back from the background
+fn low_memory(&mut self, ctx: &mut Context)   // the OS wants memory back (love.lowmemory)
 fn quit(&mut self, ctx: &mut Context) -> bool                   // return true to cancel quitting
 ```
 
@@ -307,6 +312,8 @@ shift() ctrl() alt() -> bool
 axis(negative: Key, positive: Key) -> f32              // -1, 0, 1
 set_key_repeat(bool)  has_key_repeat()                 // repeat key_pressed events (default off)
 set_text_input(bool)                                   // text_input callbacks (default on)
+set_screen_keyboard(bool)                              // on-screen keyboard on Android and iOS, else no-op
+has_screen_keyboard() -> bool                          // true on Android and iOS
 ```
 `Key` variants: `A..Z`, `Num0..Num9`, `F1..F12`, `Up Down Left Right`, `Space Enter Escape Tab
 Backspace Delete Insert Home End PageUp PageDown`, `LShift RShift LCtrl RCtrl LAlt RAlt LSuper
@@ -319,7 +326,7 @@ KpMultiply KpDivide KpEnter KpDecimal`, `Unknown`. `Key::ALL`, `key.name()` (e.g
 
 ```rust
 x() y() position() -> Vec2   delta() -> Vec2   wheel() -> Vec2     // logical px; delta/wheel per frame
-is_down(MouseButton)  was_pressed(MouseButton)  was_released(MouseButton)
+is_down(MouseButton)  was_pressed(MouseButton)  was_released(MouseButton)  was_cancelled(MouseButton)
 is_inside()  set_visible(bool) is_visible()  set_grabbed(bool) is_grabbed()  set_position(x, y)
 ```
 `MouseButton::{Left, Right, Middle, Back, Forward, Other(u16)}`.
@@ -346,7 +353,8 @@ LeftStick RightStick LeftShoulder RightShoulder LeftTrigger RightTrigger DPadUp 
 DPadRight`. `GamepadAxis`: `LeftX LeftY RightX RightY` (-1..1, **y down**) and `LeftTrigger
 RightTrigger` (0..1). Both have `ALL` and `name()` (LÖVE names, e.g. `"dpup"`, `"triggerleft"`).
 `GamepadId::index()` gives a `usize`. Stick values have a dead zone applied already. Controller
-input keeps arriving while the window is unfocused or minimized; macOS has no rumble.
+input keeps arriving while the window is unfocused or minimized. Rumble: Windows and Linux, plus
+PlayStation pads (USB or Bluetooth) on macOS; other pads on macOS can't (`false`).
 
 ## Touch (`ctx.touch`)
 
@@ -355,6 +363,7 @@ touches() -> &[TouchPoint]   count() -> usize            // fingers on screen, o
 get(TouchId) -> Option<&TouchPoint>   position(TouchId) -> Option<Vec2>
 was_pressed(TouchId) -> bool   pressed() -> impl Iterator<Item = &TouchPoint>   // this frame
 released() -> &[TouchPoint]                              // lifted this frame, last position
+cancelled() -> &[TouchPoint]                             // taken by the OS this frame, last position
 ```
 `TouchPoint { id: TouchId, position: Vec2, start: Vec2, delta: Vec2, pressure: f32 }` (logical
 px; `delta` since last frame; `pressure` 0..1, 1 when unsupported). `TouchId::index()` gives a
@@ -373,6 +382,7 @@ delta() -> f32   fps() -> f32   average_delta() -> f32   time() -> f64   frame_c
 title() set_title(impl Into<String>)  size() -> (f32, f32)  set_size(w: u32, h: u32)
 scale_factor() -> f64  set_fullscreen(bool) is_fullscreen()  set_resizable(bool)
 has_focus()  minimize()  is_minimized()  maximize()  winit() -> &winit::window::Window
+safe_area() -> (f32, f32, f32, f32)   // x, y, w, h clear of notches, system bars and the on-screen keyboard (love.window.getSafeArea)
 ```
 While minimized the game keeps running, capped at 30 fps.
 
@@ -382,8 +392,18 @@ While minimized the game keeps running, capped at 30 fps.
 ctx.audio.new_source(path) -> Result<Source>              // wav/ogg/mp3/flac, fully decoded
 ctx.audio.new_source_from_bytes(&[u8]) -> Result<Source>
 ctx.audio.new_source_from_data(SoundData) -> Source
-ctx.audio.set_volume(f32)  volume()  is_available()       // master volume
+ctx.audio.set_volume(f32)  volume()                       // master volume
+ctx.audio.is_available() -> bool                          // false while no output device works
+ctx.audio.set_session(AudioSession)  session()            // iOS only; records the choice elsewhere
 ```
+`AudioSession` (iOS): `Ambient` (default; mixes with the player's music, silent switch mutes),
+`SoloAmbient` (stops their music, silent switch mutes), `Playback` (stops their music, ignores the
+silent switch). Call `set_session` in `load`.
+
+Playing sounds pause while the app is suspended, paused by Android, or interrupted (a call on iOS), and
+carry on afterwards. The stream is closed meanwhile. If the device goes away it's reopened by itself.
+Without a device, `play()` on a looping sound waits for one, and on anything else does nothing.
+
 `Source` (clone = same voice; `duplicate()` = independent voice):
 ```rust
 play() pause() stop()  play_overlapping()  duplicate() -> Source
@@ -397,6 +417,18 @@ SoundData::from_samples(sample_rate, channels, Vec<f32>)   // interleaved, -1..1
 SoundData::generate(sample_rate, seconds, |t_seconds| -> sample)   // mono synth
 d.channels() d.sample_rate() d.duration()
 ```
+
+## Filesystem (`love2drs::filesystem`)
+
+```text
+read(path) -> Result<Vec<u8>>   // from disk, then from the app package on Android/iOS
+save_dir() -> PathBuf           // where to save; the working directory on mobile
+```
+
+## Android (`love2drs::android_main!`)
+
+`love2drs::android_main!(main);` next to `fn main` makes it the entry point on Android. It expands to
+nothing on other platforms. `main` may return `()` or a `Result`.
 
 ## Math (`love2drs::math`)
 

@@ -1175,10 +1175,11 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "love2drs"
 version = "0.1.0"
-source = "git+https://github.com/gccody/Love2DRS#7655b6d046ee334ebeb4f6e3cb3efc9dd8578899"
+source = "git+https://github.com/gccody/Love2DRS#b8e732f325469e75f5819ca094ef0f820d164542"
 dependencies = [
  "ab_glyph",
  "android_logger",
+ "block2 0.6.2",
  "bytemuck",
  "gilrs",
  "glam",
@@ -1187,6 +1188,7 @@ dependencies = [
  "jni 0.21.1",
  "log",
  "objc2 0.6.5",
+ "objc2-avf-audio",
  "objc2-core-haptics",
  "objc2-foundation 0.3.2",
  "objc2-game-controller",
@@ -1468,6 +1470,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "libc",
  "objc2 0.6.5",
  "objc2-core-audio",
@@ -1482,7 +1485,11 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
+ "objc2-audio-toolbox",
+ "objc2-core-audio-types",
  "objc2-foundation 0.3.2",
 ]
 
