@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Paints assets/icon.png: the Cabin Euchre app icon.
+"""Paints assets/icon.png (phones) and assets/icon.ico (the Windows .exe), the
+Cabin Euchre app icon.
 
     python tools/make_icon.py [output.png]
 
@@ -20,6 +21,8 @@ GRID = 128
 TEXEL = 8
 SIZE = GRID * TEXEL
 SUPERSAMPLE = 2
+# Everything Windows asks for, from the title bar and Explorer lists up to large tiles.
+ICO_SIZES = [(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)]
 
 
 def hex_rgb(value):
@@ -280,6 +283,7 @@ def main():
     place(art, face_card(80, 108), -7, 76, 62)
     art = art.resize((SIZE, SIZE), Image.LANCZOS).convert("RGB")
     art.save(out, optimize=True)
+    art.save(out.rsplit(".", 1)[0] + ".ico", sizes=ICO_SIZES)
 
 
 if __name__ == "__main__":

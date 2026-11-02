@@ -36,6 +36,10 @@ steamworks = { version = "0.13", optional = true }
 [features]
 steam = ["dep:steamworks"]
 
+# Puts the icon and the name into the Windows .exe (see build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # To develop against a local checkout of the framework instead, uncomment:
 # [patch."https://github.com/gccody/Love2DRS"]
 # love2drs = { path = "C:/Users/gccody/.t3/projects/love2drs" }
