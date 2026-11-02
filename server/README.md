@@ -2,7 +2,8 @@
 
 A Cloudflare Worker (Rust, compiled to wasm) with one **Durable Object per table**. Every online
 game, from Steam, phone or anything else, plays at one of these rooms, so everyone can sit at the
-same table. Steam only passes room codes around (see `src/platform/steam.rs` in the game).
+same table. Steam only passes room codes and handles around (see `src/platform/steam.rs` in the
+game).
 
 The rules aren't here. `euchre-core` (`../core`) has them: `room.rs` holds the real match and
 answers every message with per-player messages; `protocol.rs` is the wire format; `mirror.rs` is
@@ -14,11 +15,26 @@ every change, and runs one alarm per room for turn timeouts and clean-up.
 | route | what |
 |---|---|
 | `GET /create?target=10&stick=1` | WebSocket: open a new room (random 5-letter code) with those rules |
-| `GET /join/{CODE}` | WebSocket: join or rejoin a room |
+| `GET /join/{CODE}` | WebSocket: join or rejoin a room. The code is the invitation |
+| `GET /knock/{HANDLE}` | WebSocket: ask to join a room by its handle |
 | `GET /` | a plain-text hello |
 
 After connecting, the game sends `Hello { version, name, token }`. A token from an earlier
 `Welcome` gets the same seat back. Everything else is in `core/src/protocol.rs`.
+
+### Private tables
+
+Tables are private by default. Anyone with the code sits straight down (an invite carries the
+code), but a Steam friend's "Join Game" in the friends list only **knocks**. Rich presence holds
+the room's *handle*: the Durable Object's id (64 hex digits), which can't be turned back into the
+code. A knock gets `Waiting`, and the host (the first person seated; the job passes on when they
+leave) gets `Knocks` with everyone waiting and answers each with `Answer { id, accept }`. A yes
+seats them and sends the usual `Welcome`. A no sends `Error { code: Declined }` and closes the
+socket. Hanging up while waiting withdraws the knock, and if no person is left at the table every
+knock is turned away.
+
+The host can send `SetPublic { public: true }`: knocks then sit straight down, and anyone already
+waiting is let in. `Seats` carries `public` and `host` so every player's lobby shows it.
 
 ## Run it locally
 
@@ -36,9 +52,14 @@ The game connects to `ws://127.0.0.1:8787` by default. In another terminal:
 # Plays a whole 3-player game (plus a bot) over real sockets, with a mid-game reconnect.
 cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3
 
+# It also has a stranger knock (the host says no) and, with 3+ players, has the last guest
+# knock instead of using the code (the host lets them in).
+
 # Or host from the game, and let two simulated players join its table.
-EUCHRE_SCENE=host EUCHRE_AUTOPLAY=1 cargo run      # prints "seated at table ABCDE"
+EUCHRE_SCENE=host EUCHRE_AUTOPLAY=1 cargo run      # prints "seated at table ABCDE, handle 5f3c..."
 cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 2 ABCDE
+# Or knock with the handle instead: the game shows LET IN / NO (MENU in a game).
+cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 1 5f3c...
 ```
 
 ## Deploy

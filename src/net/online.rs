@@ -48,8 +48,10 @@ pub enum Status {
 pub enum Join {
     /// A new room with a fresh code.
     Create,
-    /// The room with this code.
+    /// The room with this code (the code is the invitation).
     Code(String),
+    /// Ask to join the room with this handle (a Steam friend's "Join Game").
+    Knock(String),
 }
 
 enum Command {
@@ -67,6 +69,7 @@ pub struct Connection {
     events: Receiver<Event>,
     status: Status,
     room: Option<String>,
+    handle: Option<String>,
     inbox: VecDeque<ServerMsg>,
 }
 
@@ -83,7 +86,7 @@ impl Connection {
             .name("euchre-net".into())
             .spawn(move || run(server, join, query, name, command_rx, event_tx))
             .expect("spawn the network thread");
-        Connection { commands, events, status: Status::Connecting, room: None, inbox: VecDeque::new() }
+        Connection { commands, events, status: Status::Connecting, room: None, handle: None, inbox: VecDeque::new() }
     }
 
     pub fn send(&mut self, msg: ClientMsg) {
@@ -97,8 +100,9 @@ impl Connection {
             match self.events.try_recv() {
                 Ok(Event::Status(s)) => self.status = s,
                 Ok(Event::Msg(msg)) => {
-                    if let ServerMsg::Welcome { room, .. } = &msg {
+                    if let ServerMsg::Welcome { room, handle, .. } = &msg {
                         self.room = Some(room.clone());
+                        self.handle = Some(handle.clone());
                     }
                     self.inbox.push_back(msg);
                 }
@@ -124,6 +128,11 @@ impl Connection {
 
     pub fn room_code(&self) -> Option<String> {
         self.room.clone()
+    }
+
+    /// What friends may see (never the code): see `euchre::protocol`.
+    pub fn room_handle(&self) -> Option<String> {
+        self.handle.clone()
     }
 }
 
@@ -153,6 +162,7 @@ fn run(server: String, mut join: Join, query: String, name: String, commands: Re
         let url = match &join {
             Join::Create => format!("{server}/create{query}"),
             Join::Code(code) => format!("{server}/join/{code}"),
+            Join::Knock(handle) => format!("{server}/knock/{handle}"),
         };
         match connect(&url) {
             Ok(mut socket) => {
@@ -276,12 +286,15 @@ fn serve(
                     }
                 };
                 match &msg {
-                    ServerMsg::Welcome { room, token: t } => {
-                        // Reconnect to this room, as this player.
+                    ServerMsg::Welcome { room, token: t, .. } => {
+                        // Reconnect to this room, as this player (with the code: we're in now).
                         *join = Join::Code(room.clone());
                         *token = Some(t.clone());
                     }
-                    ServerMsg::Error { code: code @ (ErrorCode::NoSuchRoom | ErrorCode::RoomFull | ErrorCode::Version), .. } => {
+                    ServerMsg::Error {
+                        code: code @ (ErrorCode::NoSuchRoom | ErrorCode::RoomFull | ErrorCode::Version | ErrorCode::Declined),
+                        ..
+                    } => {
                         return Ended::Refused(code.describe().into());
                     }
                     _ => {}

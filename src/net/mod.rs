@@ -63,4 +63,12 @@ impl Link {
             Link::Online(c) => c.room_code(),
         }
     }
+
+    /// The room handle (what friends see instead of the code), for an online game.
+    pub fn room_handle(&self) -> Option<String> {
+        match self {
+            Link::Local(_) => None,
+            Link::Online(c) => c.room_handle(),
+        }
+    }
 }

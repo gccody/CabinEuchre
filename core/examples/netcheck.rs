@@ -2,6 +2,9 @@
 //! new room over real WebSockets and plays a whole game, each player keeping
 //! only a [`Mirror`] of what it's told (exactly like the game does). One
 //! player drops and reconnects mid-game, and a bogus room code is tried.
+//! With 3+ players the last one comes by the room's handle (like a Steam
+//! friend's "Join Game") and the host lets them in; a stranger knocking the
+//! same way is turned away.
 //!
 //! ```sh
 //! cd server && npx wrangler dev        # in one terminal
@@ -47,25 +50,56 @@ fn recv(socket: &mut Socket) -> Option<ServerMsg> {
     }
 }
 
+/// How a player arrives.
+enum Via {
+    Create,
+    /// With the code: sits straight down.
+    Code(String),
+    /// With the handle: asks the host first.
+    Knock(String),
+}
+
+/// A stranger asks to join by handle, and should be turned away.
+fn knock_and_get_declined(server: &str, handle: &str) {
+    let mut socket = connect(&format!("{server}/knock/{handle}"));
+    send(&mut socket, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: "stranger".into(), token: None });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut waited = false;
+    while Instant::now() < deadline {
+        match recv(&mut socket) {
+            Some(ServerMsg::Waiting) => waited = true,
+            Some(ServerMsg::Error { code: ErrorCode::Declined, .. }) => {
+                assert!(waited, "told to wait before being turned away");
+                println!("stranger: turned away: ok");
+                return;
+            }
+            Some(other) => panic!("stranger got {other:?}"),
+            None => {}
+        }
+    }
+    panic!("stranger never got an answer");
+}
+
 /// Plays one seat until the game ends. Returns the final score (theirs, ours).
 /// `start_with`: start the game once this many people are seated (the host only).
-/// `code_tx`: where the host passes on the room code.
+/// `code_tx`: where the host passes on the room code and handle.
 fn play(
     server: String,
-    room: Option<String>,
+    via: Via,
     name: String,
     start_with: Option<usize>,
     drop_after: Option<usize>,
-    code_tx: Option<mpsc::Sender<String>>,
+    code_tx: Option<mpsc::Sender<(String, String)>>,
 ) -> (String, [u32; 2]) {
-    let url = match &room {
-        Some(code) => format!("{server}/join/{code}"),
-        None => format!("{server}/create?target=5"),
+    let url = match &via {
+        Via::Code(code) => format!("{server}/join/{code}"),
+        Via::Knock(handle) => format!("{server}/knock/{handle}"),
+        Via::Create => format!("{server}/create?target=5"),
     };
     let mut socket = connect(&url);
     send(&mut socket, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: name.clone(), token: None });
     let mut token = None;
-    let mut code = room.clone().unwrap_or_default();
+    let mut code = String::new();
     let mut mirror: Option<Mirror> = None;
     let mut moves_made = 0;
     let mut dropped = false;
@@ -105,13 +139,22 @@ fn play(
             continue;
         };
         match msg {
-            ServerMsg::Welcome { room, token: t } => {
+            ServerMsg::Welcome { room, token: t, handle } => {
                 println!("{name}: seated in room {room}");
                 if let Some(tx) = &code_tx {
-                    let _ = tx.send(room.clone());
+                    let _ = tx.send((room.clone(), handle));
                 }
                 code = room;
                 token = Some(t);
+            }
+            ServerMsg::Waiting => println!("{name}: waiting for the host"),
+            ServerMsg::Knocks { requests } => {
+                // The host lets the guests in and turns strangers away.
+                for k in requests {
+                    let accept = k.name.starts_with("GUEST");
+                    println!("{name}: {} asks to join: {}", k.name, if accept { "let in" } else { "no" });
+                    send(&mut socket, &ClientMsg::Answer { id: k.id, accept });
+                }
             }
             ServerMsg::Seats(s) => {
                 let names: Vec<_> = s.seats.iter().map(|x| format!("{}({:?})", x.name, x.kind)).collect();
@@ -144,12 +187,17 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let server = args.next().unwrap_or_else(|| "ws://127.0.0.1:8787".into());
     let players: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(3).clamp(1, 4);
-    // With a room code, only join it (as `players` guests): e.g. a table the game is hosting.
+    // With a room code (or handle), only join it (as `players` guests): e.g.
+    // a table the game is hosting. A handle asks the host first.
     if let Some(code) = args.next() {
         let guests: Vec<_> = (0..players)
             .map(|i| {
-                let (server, code) = (server.clone(), code.clone());
-                thread::spawn(move || play(server, Some(code), format!("guest{i}"), None, None, None))
+                let server = server.clone();
+                let via = match euchre_core::protocol::clean_handle(&code) {
+                    Some(handle) => Via::Knock(handle),
+                    None => Via::Code(code.clone()),
+                };
+                thread::spawn(move || play(server, via, format!("guest{i}"), None, None, None))
             })
             .collect();
         for g in guests {
@@ -179,16 +227,18 @@ fn main() {
     }
 
     // The host creates the room; the others join with its code.
-    let (code_tx, code_rx) = mpsc::channel::<String>();
+    let (code_tx, code_rx) = mpsc::channel::<(String, String)>();
     let host_server = server.clone();
-    let host = thread::spawn(move || play(host_server, None, "host".into(), Some(players), None, Some(code_tx)));
-    let code = code_rx.recv().unwrap();
-    println!("room {code}");
+    let host = thread::spawn(move || play(host_server, Via::Create, "host".into(), Some(players), None, Some(code_tx)));
+    let (code, handle) = code_rx.recv().unwrap();
+    println!("room {code}, handle {}...", &handle[..8.min(handle.len())]);
+    knock_and_get_declined(&server, &handle);
     let mut guests = Vec::new();
     for i in 1..players {
         let server = server.clone();
-        let code = code.clone();
-        guests.push(thread::spawn(move || play(server, Some(code), format!("guest{i}"), None, (i == 1).then_some(4), None)));
+        // With three or more, the last guest asks to join instead of using the code.
+        let via = if players >= 3 && i == players - 1 { Via::Knock(handle.clone()) } else { Via::Code(code.clone()) };
+        guests.push(thread::spawn(move || play(server, via, format!("guest{i}"), None, (i == 1).then_some(4), None)));
     }
     let (_, host_score) = host.join().expect("host finished");
     println!("host final score {host_score:?}");

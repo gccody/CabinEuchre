@@ -13,14 +13,22 @@
 //!
 //! Seats in this file are absolute (0-3 around the table). Messages are
 //! turned into each player's point of view (they are seat 0) as they go out.
+//!
+//! Getting in (see `protocol.rs`): [`Room::join`] seats anyone who came with
+//! the code. [`Room::knock`] is for players who came by the handle (a Steam
+//! friend's "Join Game"): at a public table they sit straight down, at a
+//! private one (the default) they wait until the host answers. Admitted and
+//! declined requests are picked up by the server with
+//! [`Room::take_admitted`] / [`Room::take_declined`], since those players
+//! aren't seated yet and have no seat to address messages to.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ai;
 use crate::game::Match;
 use crate::protocol::{
-    ClientMsg, ErrorCode, HandStart, Move, PROTOCOL_VERSION, SeatInfo, SeatKind, SeatsInfo, ServerMsg, Shown,
-    clean_name,
+    ClientMsg, ErrorCode, HandStart, KnockInfo, Move, PROTOCOL_VERSION, SeatInfo, SeatKind, SeatsInfo, ServerMsg,
+    Shown, clean_name,
 };
 use crate::round::{Phase, Seat, team_of};
 use crate::save::LoadError;
@@ -38,6 +46,15 @@ pub enum Occupant {
     Human { name: String, token: String, connected: bool },
 }
 
+/// A player asking to join, waiting for the host's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Knock {
+    pub id: u32,
+    pub name: String,
+    /// The seat token they get if they're let in.
+    pub token: String,
+}
+
 /// A message for the player in absolute seat `to`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outgoing {
@@ -48,6 +65,8 @@ pub struct Outgoing {
 #[derive(Debug, Clone)]
 pub struct Room {
     pub code: String,
+    /// What friends see instead of the code (see `protocol.rs`).
+    pub handle: String,
     seats: [Occupant; 4],
     game: Option<Match>,
     /// Games dealt in this room so far.
@@ -57,7 +76,15 @@ pub struct Room {
     /// Counts every move, so a turn timer can tell whether the turn it was
     /// set for is still the one being waited on.
     moves: u64,
+    /// Players coming by the handle sit down without asking.
+    public: bool,
+    /// Who answers requests and sets `public`: the first person to sit down,
+    /// then whoever is next when they leave.
+    host: Option<Seat>,
+    knocks: Vec<Knock>,
     outbox: Vec<Outgoing>,
+    admitted: Vec<(u32, Seat)>,
+    declined: Vec<u32>,
 }
 
 /// Everything a room needs to carry on after the server forgets it (a
@@ -66,12 +93,20 @@ pub struct Room {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoomSnapshot {
     pub code: String,
+    #[serde(default)]
+    pub handle: String,
     pub seats: [Occupant; 4],
     pub game: Option<String>,
     pub game_no: u32,
     pub target: u32,
     pub stick_the_dealer: bool,
     pub moves: u64,
+    #[serde(default)]
+    pub public: bool,
+    #[serde(default)]
+    pub host: Option<Seat>,
+    #[serde(default)]
+    pub knocks: Vec<Knock>,
 }
 
 fn rel(to: Seat, seat: Seat) -> Seat {
@@ -79,28 +114,40 @@ fn rel(to: Seat, seat: Seat) -> Seat {
 }
 
 impl Room {
-    pub fn new(code: &str, target: u32, stick_the_dealer: bool) -> Room {
+    /// A new, private room. `handle` is what friends will see (any string
+    /// for a room nobody can reach by handle, like an offline game).
+    pub fn new(code: &str, handle: &str, target: u32, stick_the_dealer: bool) -> Room {
         Room {
             code: code.to_string(),
+            handle: handle.to_string(),
             seats: std::array::from_fn(|_| Occupant::Bot),
             game: None,
             game_no: 0,
             target: target.max(1),
             stick_the_dealer,
             moves: 0,
+            public: false,
+            host: None,
+            knocks: Vec::new(),
             outbox: Vec::new(),
+            admitted: Vec::new(),
+            declined: Vec::new(),
         }
     }
 
     pub fn snapshot(&self) -> RoomSnapshot {
         RoomSnapshot {
             code: self.code.clone(),
+            handle: self.handle.clone(),
             seats: self.seats.clone(),
             game: self.game.as_ref().map(Match::to_save),
             game_no: self.game_no,
             target: self.target,
             stick_the_dealer: self.stick_the_dealer,
             moves: self.moves,
+            public: self.public,
+            host: self.host,
+            knocks: self.knocks.clone(),
         }
     }
 
@@ -119,19 +166,49 @@ impl Room {
         };
         Ok(Room {
             code: s.code,
+            handle: s.handle,
             seats: s.seats,
             game,
             game_no: s.game_no,
             target: s.target.max(1),
             stick_the_dealer: s.stick_the_dealer,
             moves: s.moves,
+            public: s.public,
+            host: s.host,
+            knocks: s.knocks,
             outbox: Vec::new(),
+            admitted: Vec::new(),
+            declined: Vec::new(),
         })
     }
 
     /// The messages produced since the last call, in order.
     pub fn take_outbox(&mut self) -> Vec<Outgoing> {
         std::mem::take(&mut self.outbox)
+    }
+
+    /// Requests the host accepted since the last call: (request id, the seat
+    /// they now hold). Attach their connection to the seat before delivering
+    /// the outbox, which already holds their welcome.
+    pub fn take_admitted(&mut self) -> Vec<(u32, Seat)> {
+        std::mem::take(&mut self.admitted)
+    }
+
+    /// Requests the host turned down (or that no longer fit) since the last call.
+    pub fn take_declined(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.declined)
+    }
+
+    pub fn is_public(&self) -> bool {
+        self.public
+    }
+
+    pub fn host(&self) -> Option<Seat> {
+        self.host
+    }
+
+    pub fn knocks(&self) -> &[Knock] {
+        &self.knocks
     }
 
     pub fn seats(&self) -> &[Occupant; 4] {
@@ -181,21 +258,94 @@ impl Room {
             self.welcome(seat, &token);
             return Ok(seat);
         }
-        let seat = *JOIN_ORDER
-            .iter()
-            .find(|&&s| self.seats[s] == Occupant::Bot)
-            .ok_or(ErrorCode::RoomFull)?;
-        self.seats[seat] = Occupant::Human { name, token: fresh_token.to_string(), connected: true };
-        self.welcome(seat, fresh_token);
+        let seat = self.free_seat().ok_or(ErrorCode::RoomFull)?;
+        self.seat_player(seat, name, fresh_token);
         Ok(seat)
     }
 
+    fn free_seat(&self) -> Option<Seat> {
+        JOIN_ORDER.iter().copied().find(|&s| self.seats[s] == Occupant::Bot)
+    }
+
+    fn seat_player(&mut self, seat: Seat, name: String, token: &str) {
+        self.seats[seat] = Occupant::Human { name, token: token.to_string(), connected: true };
+        if self.host.is_none() {
+            self.host = Some(seat);
+        }
+        self.welcome(seat, token);
+    }
+
+    /// A player who came by the handle (a Steam friend's "Join Game"). At a
+    /// public table, or with a token for a seat they already hold, they sit
+    /// down and get `Some(seat)`. Otherwise their request, `id`, waits for
+    /// the host (`None`): tell them [`ServerMsg::Waiting`].
+    pub fn knock(
+        &mut self,
+        version: u32,
+        name: &str,
+        token: Option<&str>,
+        id: u32,
+        fresh_token: &str,
+    ) -> Result<Option<Seat>, ErrorCode> {
+        if version != PROTOCOL_VERSION {
+            return Err(ErrorCode::Version);
+        }
+        let returning = token.is_some_and(|t| self.seat_of_token(t).is_some());
+        if self.public || returning || self.host.is_none() {
+            return self.join(version, name, token, fresh_token).map(Some);
+        }
+        if self.free_seat().is_none() {
+            return Err(ErrorCode::RoomFull);
+        }
+        self.knocks.retain(|k| k.id != id);
+        self.knocks.push(Knock { id, name: clean_name(name), token: fresh_token.to_string() });
+        self.send_knocks();
+        Ok(None)
+    }
+
+    /// A player waiting to be let in gave up (their connection closed).
+    pub fn cancel_knock(&mut self, id: u32) {
+        let before = self.knocks.len();
+        self.knocks.retain(|k| k.id != id);
+        if self.knocks.len() != before {
+            self.send_knocks();
+        }
+    }
+
+    /// Lets request `id` in, if there's still a seat for them.
+    fn admit(&mut self, id: u32) {
+        let Some(i) = self.knocks.iter().position(|k| k.id == id) else { return };
+        let knock = self.knocks.remove(i);
+        match self.free_seat() {
+            Some(seat) => {
+                self.admitted.push((id, seat));
+                self.seat_player(seat, knock.name, &knock.token);
+            }
+            None => self.declined.push(id),
+        }
+    }
+
     fn welcome(&mut self, seat: Seat, token: &str) {
-        let msg = ServerMsg::Welcome { room: self.code.clone(), token: token.to_string() };
+        let msg = ServerMsg::Welcome { room: self.code.clone(), token: token.to_string(), handle: self.handle.clone() };
         self.outbox.push(Outgoing { to: seat, msg });
         self.broadcast_seats();
         if self.game.is_some() {
             self.send_sync(seat);
+        }
+        if self.host == Some(seat) && !self.knocks.is_empty() {
+            self.send_knocks();
+        }
+    }
+
+    /// Hands the host's job to the next person at the table (or nobody).
+    fn pass_host(&mut self, from: Seat) {
+        if self.host == Some(from) {
+            self.host = JOIN_ORDER.iter().copied().find(|&s| matches!(self.seats[s], Occupant::Human { .. }));
+            if self.host.is_none() {
+                // Nobody left to answer: turn the waiting players away.
+                self.declined.extend(self.knocks.drain(..).map(|k| k.id));
+            }
+            self.send_knocks();
         }
     }
 
@@ -224,6 +374,9 @@ impl Room {
                     return;
                 }
                 self.seats.swap(seat, to);
+                if self.host == Some(seat) {
+                    self.host = Some(to);
+                }
                 self.broadcast_seats();
             }
             ClientMsg::Start => {
@@ -259,8 +412,37 @@ impl Room {
             }
             ClientMsg::Leave => {
                 self.seats[seat] = Occupant::Bot;
+                self.pass_host(seat);
                 self.broadcast_seats();
                 self.settle();
+            }
+            ClientMsg::SetPublic { public } => {
+                if self.host != Some(seat) {
+                    self.refuse(seat, ErrorCode::NotAllowed);
+                    return;
+                }
+                self.public = public;
+                if public {
+                    // Everyone already asking gets in (while there are seats).
+                    for id in self.knocks.iter().map(|k| k.id).collect::<Vec<_>>() {
+                        self.admit(id);
+                    }
+                    self.send_knocks();
+                }
+                self.broadcast_seats();
+            }
+            ClientMsg::Answer { id, accept } => {
+                if self.host != Some(seat) {
+                    self.refuse(seat, ErrorCode::NotAllowed);
+                    return;
+                }
+                if accept {
+                    self.admit(id);
+                } else if let Some(i) = self.knocks.iter().position(|k| k.id == id) {
+                    self.knocks.remove(i);
+                    self.declined.push(id);
+                }
+                self.send_knocks();
             }
         }
     }
@@ -378,9 +560,18 @@ impl Room {
         SeatsInfo {
             seats: std::array::from_fn(|r| self.seat_info((to + r) % 4)),
             playing: self.playing(),
+            public: self.public,
+            host: self.host.map(|h| rel(to, h)),
             target: self.target,
             stick_the_dealer: self.stick_the_dealer,
         }
+    }
+
+    /// Tells the host who is asking to join.
+    fn send_knocks(&mut self) {
+        let Some(host) = self.host else { return };
+        let requests = self.knocks.iter().map(|k| KnockInfo { id: k.id, name: k.name.clone() }).collect();
+        self.outbox.push(Outgoing { to: host, msg: ServerMsg::Knocks { requests } });
     }
 
     fn broadcast_seats(&mut self) {

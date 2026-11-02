@@ -36,7 +36,7 @@ use std::collections::VecDeque;
 
 use love2drs::prelude::*;
 
-use crate::euchre::protocol::{ClientMsg, HandStart, Move, SeatKind, SeatsInfo, ServerMsg};
+use crate::euchre::protocol::{ClientMsg, HandStart, KnockInfo, Move, SeatKind, SeatsInfo, ServerMsg};
 use crate::euchre::{
     Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
 };
@@ -192,6 +192,11 @@ struct GameOver {
 #[derive(Clone, Copy)]
 enum PauseChoice {
     Resume,
+    /// The host's answer to the first request to join.
+    Admit(u32),
+    Refuse(u32),
+    /// The host makes the table public (`true`) or private.
+    Public(bool),
     /// Online, with Steam: the overlay's invite dialog for this table.
     Invite,
     Options,
@@ -223,6 +228,11 @@ pub struct Table {
     /// Names on the plates, by seat (you're "YOU").
     names: [String; 4],
     kinds: [SeatKind; 4],
+    /// Online: we answer requests to join, and the table is public.
+    hosting: bool,
+    public: bool,
+    /// Requests to join waiting for our answer (only while hosting).
+    knocks: Vec<KnockInfo>,
     /// The current hand's result (or misdeal) has been shown: the next deal comes from the room.
     hand_done: bool,
     /// Asked the room for the whole hand again; moves are ignored until it comes.
@@ -321,6 +331,15 @@ impl Table {
         let Some(start) = start else {
             return Err(Box::new((link, pending)));
         };
+        // Requests to join aren't about the hand: the latest list counts.
+        let mut knocks = None;
+        for msg in pending.iter() {
+            if let ServerMsg::Knocks { requests } = msg {
+                knocks = Some(requests.clone());
+            }
+        }
+        let start = start - pending.iter().take(start).filter(|m| matches!(m, ServerMsg::Knocks { .. })).count();
+        pending.retain(|m| !matches!(m, ServerMsg::Knocks { .. }));
         for msg in pending.drain(..start) {
             if let ServerMsg::Seats(s) = msg {
                 seats = Some(s);
@@ -343,6 +362,11 @@ impl Table {
         if let Some(s) = seats {
             table.set_seats(&s);
         }
+        if let Some(k) = knocks.filter(|k| !k.is_empty()) {
+            table.hint = Some((format!("{} asks to join. Answer in the MENU.", k[0].name), 4.0));
+            table.knocks = k;
+            table.update_menu_button();
+        }
         if table.game.hand_untouched() {
             table.begin_hand();
         } else {
@@ -364,6 +388,9 @@ impl Table {
             pending,
             names: NAMES.map(String::from),
             kinds: [SeatKind::Human, SeatKind::Bot, SeatKind::Bot, SeatKind::Bot],
+            hosting: false,
+            public: false,
+            knocks: Vec::new(),
             hand_done: false,
             resyncing: false,
             rematch_asked: false,
@@ -400,9 +427,15 @@ impl Table {
     }
 
     fn set_seats(&mut self, s: &SeatsInfo) {
-        if let Some(code) = self.link.room_code() {
+        if let Some(handle) = self.link.room_handle() {
             let people = s.seats.iter().filter(|x| x.kind != SeatKind::Bot).count();
-            crate::platform::set_presence(Some((&code, people)));
+            crate::platform::set_presence(Some((&handle, people)));
+        }
+        self.hosting = self.link.is_online() && s.host == Some(HUMAN);
+        self.public = s.public;
+        if !self.hosting {
+            // Somebody else answers the door now.
+            self.knocks.clear();
         }
         for seat in 1..4 {
             let info = &s.seats[seat];
@@ -422,13 +455,52 @@ impl Table {
         }
     }
 
+    /// The requests to join waiting for us (the host). A new one shows a
+    /// hint; the answers are in the menu.
+    fn set_knocks(&mut self, requests: Vec<KnockInfo>, shared: &mut Shared) {
+        if let Some(new) = requests.iter().find(|k| !self.knocks.iter().any(|o| o.id == k.id)) {
+            self.hint = Some((format!("{} asks to join. Answer in the MENU.", new.name), 4.0));
+            shared.sfx.play(Sound::Pop);
+            shared.buzz(0.0, 0.0, 0.5, 0.08);
+        }
+        self.knocks = requests;
+        self.update_menu_button();
+    }
+
+    /// MENU shows how many requests to join are waiting.
+    fn update_menu_button(&mut self) {
+        let label = if self.hosting && !self.knocks.is_empty() {
+            format!("MENU ({})", self.knocks.len())
+        } else {
+            "MENU".to_string()
+        };
+        if self.menu_button.label != label {
+            let w = if label.len() > 4 { 70.0 } else { 50.0 };
+            self.menu_button.rect = Rect::new(628.0 - w, 332.0, w, 16.0);
+            self.menu_button.label = label;
+            self.menu_button.nudge();
+        }
+        // The open menu follows along.
+        if let Some(p) = &mut self.pause {
+            let was = p.focus;
+            let buttons = self.pause_buttons();
+            let p = self.pause.as_mut().expect("checked above");
+            p.focus = was.min(buttons.len() - 1);
+            p.buttons = buttons;
+        }
+    }
+
     /// Takes everything the room has sent. Seat changes and errors apply at
     /// once; anything about the hand waits in `pending` for the animation.
-    fn pump_link(&mut self) {
+    fn pump_link(&mut self, shared: &mut Shared) {
         while let Some(msg) = self.link.poll() {
             match msg {
-                ServerMsg::Seats(s) => self.set_seats(&s),
-                ServerMsg::Welcome { .. } => {}
+                ServerMsg::Seats(s) => {
+                    self.set_seats(&s);
+                    self.update_menu_button();
+                }
+                ServerMsg::Knocks { requests } => self.set_knocks(requests, shared),
+                ServerMsg::Welcome { .. } | ServerMsg::Waiting => {}
                 ServerMsg::Error { message, .. } => self.hint = Some((message, 2.2)),
                 ServerMsg::Sync { .. } => {
                     // The whole hand: moves queued before it are already in it.
@@ -1248,10 +1320,16 @@ impl Table {
     }
 
     fn open_pause(&mut self, shared: &Shared) {
-        let cx = layout::CENTER.x;
         let mut pop = Spring::new(0.85);
         pop.target = 1.0;
-        let w = 120.0;
+        let buttons = self.pause_buttons();
+        self.pause = Some(Pause { buttons, pop, focus: 0 });
+        shared.sfx.play(Sound::Pop);
+    }
+
+    fn pause_buttons(&self) -> Vec<(PauseChoice, Button)> {
+        let cx = layout::CENTER.x;
+        let w = 132.0;
         // Once the game is over there is nothing left to save. Online games
         // aren't saved: leaving hands your seat to a bot.
         let quit_label = if self.link.is_online() {
@@ -1262,6 +1340,14 @@ impl Table {
             "SAVE & QUIT"
         };
         let mut buttons = vec![(PauseChoice::Resume, Button::brass("RESUME", Rect::centered(cx, 0.0, w, 20.0)))];
+        if self.hosting {
+            if let Some(k) = self.knocks.first() {
+                buttons.push((PauseChoice::Admit(k.id), Button::green(format!("LET {} IN", k.name), Rect::centered(cx, 0.0, w, 20.0))));
+                buttons.push((PauseChoice::Refuse(k.id), Button::red("SAY NO", Rect::centered(cx, 0.0, w, 20.0))));
+            }
+            let (label, public) = if self.public { ("MAKE PRIVATE", false) } else { ("MAKE PUBLIC", true) };
+            buttons.push((PauseChoice::Public(public), Button::grey(label, Rect::centered(cx, 0.0, w, 20.0))));
+        }
         if self.link.room_code().is_some() && crate::platform::can_invite() {
             buttons.push((PauseChoice::Invite, Button::new("INVITE FRIENDS", Rect::centered(cx, 0.0, w, 20.0), palette::ORANGE, palette::ORANGE_DARK)));
         }
@@ -1273,13 +1359,26 @@ impl Table {
         for (i, (_, b)) in buttons.iter_mut().enumerate() {
             b.rect.y = top + i as f32 * 26.0;
         }
-        self.pause = Some(Pause { buttons, pop, focus: 0 });
-        shared.sfx.play(Sound::Pop);
+        buttons
     }
 
     fn pause_choice(&mut self, choice: PauseChoice, shared: &mut Shared) -> Transition {
         match choice {
             PauseChoice::Resume => self.pause = None,
+            PauseChoice::Admit(id) | PauseChoice::Refuse(id) => {
+                self.link.send(ClientMsg::Answer { id, accept: matches!(choice, PauseChoice::Admit(_)) });
+                // Gone at once; the room's next list confirms it.
+                self.knocks.retain(|k| k.id != id);
+                self.update_menu_button();
+            }
+            PauseChoice::Public(public) => {
+                self.link.send(ClientMsg::SetPublic { public });
+                // Shown at once; the room's seats confirm it.
+                self.public = public;
+                self.pause = None;
+                let line = if public { "The table is public: friends can join freely." } else { "The table is private: friends ask first." };
+                self.hint = Some((line.into(), 3.0));
+            }
             PauseChoice::Invite => {
                 if let Some(code) = self.link.room_code() {
                     crate::platform::invite_friends(&code);
@@ -1439,7 +1538,7 @@ fn explain(e: RuleError, r: &crate::euchre::Round) -> String {
 impl Scene for Table {
     fn update(&mut self, shared: &mut Shared, _ctx: &mut Context, dt: f32) -> Transition {
         self.delay = shared.settings.delay_factor();
-        self.pump_link();
+        self.pump_link(shared);
         if let Some(o) = &mut self.overlay {
             o.update(shared, dt);
         }

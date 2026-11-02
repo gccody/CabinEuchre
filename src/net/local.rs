@@ -31,7 +31,7 @@ impl LocalTable {
     }
 
     fn seated(target: u32, stick_the_dealer: bool, seed: u64) -> LocalTable {
-        let mut room = Room::new("LOCAL", target, stick_the_dealer);
+        let mut room = Room::new("LOCAL", "", target, stick_the_dealer);
         room.join(PROTOCOL_VERSION, "YOU", None, "local").expect("an empty room has seats");
         let mut t = LocalTable { room, inbox: VecDeque::new(), seed };
         t.pump();

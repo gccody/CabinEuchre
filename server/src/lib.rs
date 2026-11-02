@@ -3,7 +3,12 @@
 //!
 //! - `GET /create` (WebSocket upgrade, optional `?target=10&stick=1`): picks a
 //!   fresh room code and opens a new room with it.
-//! - `GET /join/{CODE}` (WebSocket upgrade): joins or rejoins that room.
+//! - `GET /join/{CODE}` (WebSocket upgrade): joins or rejoins that room. The
+//!   code is the invitation: whoever has it sits straight down.
+//! - `GET /knock/{HANDLE}` (WebSocket upgrade): asks to join. The handle is the
+//!   room's Durable Object id (64 hex digits), which is what players' Steam
+//!   friends see; it can't be turned back into the code. At a private table
+//!   (the default) the host has to let them in.
 //!
 //! The game rules all live in `euchre-core`: a [`Room`] holds the real match
 //! and answers each message with an outbox of per-player messages. This file
@@ -21,7 +26,7 @@
 use std::cell::RefCell;
 
 use euchre_core::protocol::{
-    ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg, clean_code, make_code,
+    ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg, clean_code, clean_handle, make_code,
 };
 use euchre_core::room::{Room, RoomSnapshot};
 use serde::{Deserialize, Serialize};
@@ -67,6 +72,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         let target = format!("https://room/{code}");
         return rooms.id_from_name(&code)?.get_stub()?.fetch_with_request(forward(&req, &target)?).await;
     }
+    if let Some(handle) = path.strip_prefix("/knock/") {
+        let Some(handle) = clean_handle(handle) else { return Response::error("Not a room handle", 404) };
+        let Ok(id) = rooms.id_from_string(&handle) else { return Response::error("Not a room handle", 404) };
+        return id.get_stub()?.fetch_with_request(forward(&req, "https://room/knock?knock=1")?).await;
+    }
     Response::error("Not found", 404)
 }
 
@@ -101,10 +111,23 @@ fn random_token() -> String {
     random_bytes(16).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Kept on each socket (it survives hibernation): whose seat it is, once they've said hello.
+/// Kept on each socket (it survives hibernation): whose seat it is, once
+/// they've said hello, or which request to join it's waiting on.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 struct Attachment {
     seat: Option<u8>,
+    /// Came by the handle: their hello asks to join instead of joining.
+    #[serde(default)]
+    via_knock: bool,
+    /// The request waiting for the host's answer.
+    #[serde(default)]
+    knock: Option<u32>,
+}
+
+impl Attachment {
+    fn seated(seat: usize) -> Attachment {
+        Attachment { seat: Some(seat as u8), via_knock: false, knock: None }
+    }
 }
 
 /// The room plus the timer bookkeeping, as stored.
@@ -153,6 +176,20 @@ impl EuchreRoom {
             }
         };
         f(&mut room, &mut saved);
+        // Requests the host answered: seat the waiting sockets before their
+        // welcome goes out, or turn them away.
+        for (id, seat) in room.take_admitted() {
+            for ws in self.knocking(id) {
+                let _ = ws.serialize_attachment(Attachment::seated(seat));
+            }
+        }
+        for id in room.take_declined() {
+            for ws in self.knocking(id) {
+                EuchreRoom::refuse(&ws, ErrorCode::Declined);
+                let _ = ws.serialize_attachment(Attachment::default());
+                let _ = ws.close(Some(4003), Some("Not let in"));
+            }
+        }
         self.deliver(&mut room);
         saved.room = room.snapshot();
         self.schedule(&room, &mut saved).await?;
@@ -167,6 +204,10 @@ impl EuchreRoom {
             .into_iter()
             .filter(|ws| attachment(ws).seat.map(usize::from) == Some(seat))
             .collect()
+    }
+
+    fn knocking(&self, id: u32) -> Vec<WebSocket> {
+        self.state.get_websockets().into_iter().filter(|ws| attachment(ws).knock == Some(id)).collect()
     }
 
     fn deliver(&self, room: &mut Room) {
@@ -234,8 +275,10 @@ impl DurableObject for EuchreRoom {
             let target = param("target").and_then(|t| t.parse().ok()).unwrap_or(10u32).clamp(1, 99);
             let stick = param("stick").is_none_or(|s| s != "0");
             let now = Date::now().as_millis() as f64;
+            // Friends see this object's id, never the code.
+            let handle = self.state.id().to_string();
             let saved = Saved {
-                room: Room::new(&code, target, stick).snapshot(),
+                room: Room::new(&code, &handle, target, stick).snapshot(),
                 turn: None,
                 last_active: now,
                 empty_since: Some(now),
@@ -249,7 +292,7 @@ impl DurableObject for EuchreRoom {
         let pair = WebSocketPair::new()?;
         let ws = pair.server;
         self.state.accept_web_socket(&ws);
-        ws.serialize_attachment(Attachment::default())?;
+        ws.serialize_attachment(Attachment { via_knock: param("knock").is_some(), ..Attachment::default() })?;
         if self.saved.borrow().is_none() {
             EuchreRoom::refuse(&ws, ErrorCode::NoSuchRoom);
             ws.close(Some(4004), Some("no such room"))?;
@@ -271,16 +314,23 @@ impl DurableObject for EuchreRoom {
             EuchreRoom::refuse(&ws, ErrorCode::NoSuchRoom);
             return Ok(());
         }
-        let seat = attachment(&ws).seat;
+        let att = attachment(&ws);
         let mut refused = None;
         let seed = random_u64();
         let fresh = random_token();
+        let knock_id = random_u32();
         self.with_room(|room, saved| {
             saved.last_active = Date::now().as_millis() as f64;
-            match (seat, msg) {
+            match (att.seat, msg) {
+                (None, ClientMsg::Hello { .. }) if att.knock.is_some() => {}
                 (None, ClientMsg::Hello { version, name, token }) => {
-                    match room.join(version, &name, token.as_deref(), &fresh) {
-                        Ok(s) => {
+                    let joined = if att.via_knock {
+                        room.knock(version, &name, token.as_deref(), knock_id, &fresh)
+                    } else {
+                        room.join(version, &name, token.as_deref(), &fresh).map(Some)
+                    };
+                    match joined {
+                        Ok(Some(s)) => {
                             // An older connection for this seat (a phone that
                             // switched networks) is replaced by this one. Both
                             // happen before the welcome is delivered.
@@ -288,7 +338,14 @@ impl DurableObject for EuchreRoom {
                                 let _ = old.serialize_attachment(Attachment::default());
                                 let _ = old.close(Some(4001), Some("Replaced by a newer connection"));
                             }
-                            let _ = ws.serialize_attachment(Attachment { seat: Some(s as u8) });
+                            let _ = ws.serialize_attachment(Attachment::seated(s));
+                        }
+                        Ok(None) => {
+                            // A private table: wait for the host.
+                            let _ = ws.serialize_attachment(Attachment { knock: Some(knock_id), ..att });
+                            if let Ok(text) = serde_json::to_string(&ServerMsg::Waiting) {
+                                let _ = ws.send_with_str(&text);
+                            }
                         }
                         Err(code) => refused = Some(code),
                     }
@@ -348,7 +405,13 @@ impl DurableObject for EuchreRoom {
 impl EuchreRoom {
     /// A socket closed: if it held a seat (and no newer socket does), the seat waits for its player.
     async fn left(&self, ws: &WebSocket) -> Result<()> {
-        let Some(seat) = attachment(ws).seat else { return Ok(()) };
+        let att = attachment(ws);
+        if let Some(id) = att.knock {
+            // Gave up waiting to be let in.
+            let _ = ws.serialize_attachment(Attachment::default());
+            return self.with_room(|room, _| room.cancel_knock(id)).await;
+        }
+        let Some(seat) = att.seat else { return Ok(()) };
         // Forget this socket's seat first, so only newer sockets for it count.
         let _ = ws.serialize_attachment(Attachment::default());
         let _ = ws.close(Some(1000), Some("bye"));

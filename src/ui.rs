@@ -218,6 +218,11 @@ impl Button {
     }
 
     /// Triggers the press animation without a click (keyboard shortcuts).
+    /// A silent little bounce (something about the button changed).
+    pub fn nudge(&mut self) {
+        self.pop.impulse(-2.5);
+    }
+
     pub fn flash(&mut self, sfx: &Sfx) {
         sfx.play(Sound::Select);
         self.pressed = 1.0;

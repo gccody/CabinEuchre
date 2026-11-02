@@ -12,8 +12,10 @@ an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad.
 
 **Online play** (cross-platform): host a table or join one with a 5-letter code; bots fill empty
 seats. Rooms run on a Cloudflare Worker with one Durable Object per table (`server/`). Steam builds
-(`--features steam`) add "Join Game" from the friends list and an invite button. Steam only passes
-room codes around, so Steam and phone players share tables.
+(`--features steam`) add "Join Game" from the friends list and an invite button. Tables are private:
+"Join Game" only asks the host (LET IN / NO) unless the host made the table public, while an
+invite or the code sits you straight down. Steam only passes codes and room handles around, so
+Steam and phone players share tables.
 
 Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API questions. Its
 `references/api.md` is the API reference. Don't guess method names.
@@ -43,10 +45,10 @@ the monitor's refresh rate.
 |---|---|
 | `EUCHRE_FIXED_DT=n` | every frame advances exactly n/60 s (1 for screenshots, 4 to fast-forward soak runs) |
 | `EUCHRE_SCENE=table\|continue\|options\|rules` | start in a game, resume the saved game, or on the title with a panel open |
-| `EUCHRE_SCENE=online\|host\|code` | the PLAY ONLINE menu, hosting a new table right away, or the code keyboard (with "KQJ" typed) |
+| `EUCHRE_SCENE=online\|host\|code` | the PLAY ONLINE menu, hosting a new table right away, or the code keyboard (with "KQJ" typed). With any `EUCHRE_SCENE` (or autoplay) the lobby logs the table code and handle when you sit down, for `netcheck` |
 | `EUCHRE_SERVER=ws://...` | the room server (also read at build time; default `ws://127.0.0.1:8787`, i.e. `wrangler dev`) |
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
-| `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down and logs the table code |
+| `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
 | `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
 | `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file and the saved game, so screenshots don't depend on the player's options or a game they left |
@@ -65,8 +67,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
 | `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token) |
-| `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect`, the invite dialog, join requests (`+connect CODE` or the overlay). No-ops without it |
-| `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, seats, DEAL, INVITE, LEAVE). Hands the link to the table once the room deals |
+| `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). No-ops without it |
+| `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, private/public, seats, LET IN / NO, DEAL, INVITE, LEAVE), waiting for the host after a knock. Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
@@ -121,6 +123,12 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   `online_tests.rs`. Never send a player another seat's cards: the room's `Shown::of` hides the
   dealer's discard from everyone but the dealer.
 - Changing a message's shape means bumping `protocol::PROTOCOL_VERSION`.
+- **Private by default.** The room code is the invitation: `/join/CODE` (typed, or a Steam invite
+  `+connect CODE`) sits you down. Steam rich presence only ever holds the room's *handle* (its
+  Durable Object id) as `+knock HANDLE`, and `/knock/HANDLE` waits for the host (the first person
+  seated; `Room::pass_host` moves the job on) to answer, unless the host made the table public.
+  Never put the code in rich presence or anywhere friends can see it. The host answers in the
+  lobby (a LET IN / NO card over the felt) or, mid-game, in the pause menu (MENU shows the count).
 - The room server (`server/src/lib.rs`) only moves messages, saves the room after every change
   (it may hibernate at any moment) and keeps one alarm for turn timeouts (45 s; 15 s while
   disconnected) and room expiry. Keep it timer-free otherwise: bots move instantly there, and the

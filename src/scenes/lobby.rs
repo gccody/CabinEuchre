@@ -8,7 +8,10 @@
 //!   works the same on a phone, a Steam Deck or a desktop.
 //! - **Connecting**, then **Seated**: the room code in big brass tiles, the
 //!   four seats (tap a bot's seat to move there), DEAL, INVITE (Steam) and LEAVE.
-//!   Bots fill any seat nobody takes.
+//!   Bots fill any seat nobody takes. Tables are private: a Steam friend's
+//!   "Join Game" only asks, and the host gets LET IN / NO. The host can
+//!   MAKE PUBLIC so friends sit straight down. The code always gets you in.
+//! - **Knocking**: asked to join by "Join Game", waiting for the host.
 //! - **Failed**: why, and BACK.
 //!
 //! When the room deals (or you join a game in progress) the connection is
@@ -18,7 +21,7 @@ use std::collections::VecDeque;
 
 use love2drs::prelude::*;
 
-use crate::euchre::protocol::{ClientMsg, SeatKind, SeatsInfo, ServerMsg, clean_code};
+use crate::euchre::protocol::{ClientMsg, ErrorCode, KnockInfo, SeatKind, SeatsInfo, ServerMsg, clean_code};
 use crate::juice::Spring;
 use crate::net::online::Join;
 use crate::net::{Connection, Link, Status};
@@ -49,6 +52,8 @@ enum Stage {
     Menu,
     Entry(Field),
     Connecting,
+    /// Asked to join by handle; the host hasn't answered yet.
+    Knocking,
     Seated,
     Failed(String),
 }
@@ -67,6 +72,11 @@ enum Act {
     Invite,
     Sit(usize),
     Leave,
+    /// The host flips the table between private and public.
+    Public(bool),
+    /// The host's answer to a request to join.
+    Admit(u32),
+    Refuse(u32),
 }
 
 pub struct Lobby {
@@ -80,6 +90,10 @@ pub struct Lobby {
     /// Messages for the table, kept until it takes over.
     pending: VecDeque<ServerMsg>,
     code: Option<String>,
+    /// What friends see instead of the code (Steam rich presence).
+    handle: Option<String>,
+    /// Requests to join waiting for our answer (only while we host).
+    knocks: Vec<KnockInfo>,
     note: Option<(String, f32)>,
     pop: Spring,
     age: f32,
@@ -103,6 +117,8 @@ impl Lobby {
             seats: None,
             pending: VecDeque::new(),
             code: None,
+            handle: None,
+            knocks: Vec::new(),
             note: None,
             pop: Spring::new(0.85),
             age: 0.0,
@@ -130,10 +146,15 @@ impl Lobby {
         l
     }
 
-    /// Straight to a room (an invite from a friend, or `+connect CODE`).
-    pub fn join(shared: &Shared, code: &str) -> Self {
+    /// Where a friend's invite (`+connect CODE`: sit straight down) or
+    /// "Join Game" (`+knock HANDLE`: ask the host) leads.
+    pub fn from_request(shared: &Shared, request: platform::JoinRequest) -> Self {
         let mut l = Lobby::new(shared);
-        l.connect(Join::Code(code.to_string()), shared);
+        let join = match request {
+            platform::JoinRequest::Code(code) => Join::Code(code),
+            platform::JoinRequest::Knock(handle) => Join::Knock(handle),
+        };
+        l.connect(join, shared);
         l
     }
 
@@ -149,6 +170,8 @@ impl Lobby {
         self.seats = None;
         self.pending.clear();
         self.code = None;
+        self.handle = None;
+        self.knocks.clear();
         self.dealing = false;
         self.set_stage(Stage::Connecting, shared);
     }
@@ -162,8 +185,21 @@ impl Lobby {
         self.pop.target = 1.0;
     }
 
+    /// Rebuilds the controls in place (the seats or requests changed),
+    /// keeping the focus on the same control where it still exists.
+    fn rebuild(&mut self, shared: &Shared) {
+        let was = self.buttons.get(self.focus).map(|(a, _)| *a);
+        self.buttons = self.build(shared);
+        self.focus = was.and_then(|a| self.buttons.iter().position(|(b, _)| *b == a)).unwrap_or(0);
+    }
+
+    /// We answer requests to join and choose public or private.
+    fn hosting(&self) -> bool {
+        self.seats.as_ref().is_some_and(|s| s.host == Some(0))
+    }
+
     /// The controls for the current stage.
-    fn build(&self, _shared: &Shared) -> Vec<(Act, Button)> {
+    fn build(&self, shared: &Shared) -> Vec<(Act, Button)> {
         let mut b: Vec<(Act, Button)> = Vec::new();
         let bottom = PANEL.y + PANEL.h - 26.0;
         match &self.stage {
@@ -204,10 +240,22 @@ impl Lobby {
                 }
                 b.extend(row);
             }
-            Stage::Connecting => {
+            Stage::Connecting | Stage::Knocking => {
                 b.push((Act::Leave, Button::grey("CANCEL", Rect::centered(CX, bottom, 90.0, 18.0))));
             }
             Stage::Seated => {
+                // The host's answer to the first request comes first, so the
+                // focus lands on LET IN.
+                if let Some(k) = self.knocks.first().filter(|_| self.hosting()) {
+                    b.push((Act::Admit(k.id), Button::green("LET IN", Rect::centered(CX - 34.0, KNOCK_Y + 10.0, 60.0, 18.0))));
+                    b.push((Act::Refuse(k.id), Button::red("NO", Rect::centered(CX + 34.0, KNOCK_Y + 10.0, 60.0, 18.0))));
+                }
+                if self.hosting() {
+                    let public = self.seats.as_ref().is_some_and(|s| s.public);
+                    let label = if public { "MAKE PRIVATE" } else { "MAKE PUBLIC" };
+                    let x = self.privacy_left(shared) + self.privacy_width(shared) + PRIVACY_GAP;
+                    b.push((Act::Public(!public), Button::grey(label, Rect::new(x, PRIVACY_Y - 8.0, PRIVACY_BUTTON_W, 16.0))));
+                }
                 for seat in 1..4 {
                     let p = seat_pos(seat);
                     b.push((Act::Sit(seat), Button::grey("SIT HERE", Rect::centered(p.x, p.y + 16.0, 62.0, 14.0))));
@@ -249,9 +297,37 @@ impl Lobby {
 
     fn visible(&self, act: Act) -> bool {
         match act {
-            Act::Sit(seat) => self.seats.as_ref().is_some_and(|s| s.seats[seat].kind == SeatKind::Bot),
+            // Hidden under a request to join.
+            Act::Sit(seat) => {
+                self.seats.as_ref().is_some_and(|s| s.seats[seat].kind == SeatKind::Bot) && !self.knock_showing()
+            }
             _ => true,
         }
+    }
+
+    /// The private / public note: a tag and what it means for friends.
+    fn privacy_note(&self) -> (&'static str, &'static str) {
+        let public = self.seats.as_ref().is_some_and(|s| s.public);
+        match (public, self.hosting()) {
+            (false, true) => ("PRIVATE", "Friends ask you first"),
+            (false, false) => ("PRIVATE", "Friends ask the host first"),
+            (true, _) => ("PUBLIC", "Friends can join freely"),
+        }
+    }
+
+    fn privacy_width(&self, shared: &Shared) -> f32 {
+        let (tag, rest) = self.privacy_note();
+        shared.font.width(&format!("{tag}  {rest}"))
+    }
+
+    /// Where the note starts: the note and the host's button are centered together.
+    fn privacy_left(&self, shared: &Shared) -> f32 {
+        let button = if self.hosting() { PRIVACY_GAP + PRIVACY_BUTTON_W } else { 0.0 };
+        (CX - (self.privacy_width(shared) + button) / 2.0).round()
+    }
+
+    fn knock_showing(&self) -> bool {
+        self.hosting() && !self.knocks.is_empty()
     }
 
     fn press(&mut self, act: Act, shared: &mut Shared) -> Transition {
@@ -323,6 +399,20 @@ impl Lobby {
                 platform::set_presence(None);
                 self.set_stage(Stage::Menu, shared);
             }
+            Act::Public(public) => {
+                if let Some(link) = &mut self.link {
+                    link.send(ClientMsg::SetPublic { public });
+                    shared.sfx.play(Sound::CardSlide);
+                }
+            }
+            Act::Admit(id) | Act::Refuse(id) => {
+                if let Some(link) = &mut self.link {
+                    link.send(ClientMsg::Answer { id, accept: matches!(act, Act::Admit(_)) });
+                }
+                // Gone at once; the room's next list (or seats) confirms it.
+                self.knocks.retain(|k| k.id != id);
+                self.rebuild(shared);
+            }
         }
         Transition::None
     }
@@ -350,10 +440,25 @@ impl Lobby {
     /// Reads the room's messages. Returns the table once it has dealt.
     fn poll(&mut self, shared: &mut Shared) -> Option<Transition> {
         let mut deal = false;
+        let mut rebuild = false;
         while let Some(msg) = self.link.as_mut()?.poll() {
             match &msg {
-                ServerMsg::Welcome { room, .. } => {
+                ServerMsg::Welcome { room, handle, .. } => {
                     self.code = Some(room.clone());
+                    self.handle = Some(handle.clone());
+                }
+                ServerMsg::Waiting => {
+                    if self.stage == Stage::Connecting {
+                        self.set_stage(Stage::Knocking, shared);
+                    }
+                }
+                ServerMsg::Knocks { requests } => {
+                    if requests.iter().any(|k| !self.knocks.iter().any(|o| o.id == k.id)) {
+                        shared.sfx.play(Sound::Pop);
+                        shared.buzz(0.0, 0.0, 0.5, 0.08);
+                    }
+                    self.knocks = requests.clone();
+                    rebuild = true;
                 }
                 ServerMsg::Seats(s) => {
                     let people = s.seats.iter().filter(|x| x.kind != SeatKind::Bot).count();
@@ -363,10 +468,15 @@ impl Lobby {
                             shared.sfx.play(Sound::Pop);
                         }
                     }
-                    if let Some(code) = &self.code {
-                        platform::set_presence(Some((code, people)));
+                    if let Some(handle) = &self.handle {
+                        platform::set_presence(Some((handle, people)));
+                    }
+                    if s.host != Some(0) {
+                        // Somebody else answers the door now.
+                        self.knocks.clear();
                     }
                     self.seats = Some(s.clone());
+                    rebuild = true;
                 }
                 ServerMsg::Deal(_) | ServerMsg::Sync { .. } => deal = true,
                 ServerMsg::Error { message, .. } => {
@@ -377,10 +487,18 @@ impl Lobby {
             }
             self.pending.push_back(msg);
         }
-        if self.stage == Stage::Connecting && self.code.is_some() && self.seats.is_some() {
+        if rebuild && self.stage == Stage::Seated {
+            self.rebuild(shared);
+        }
+        if matches!(self.stage, Stage::Connecting | Stage::Knocking) && self.code.is_some() && self.seats.is_some() {
             shared.sfx.play(Sound::Trump);
-            if self.autoplay {
-                eprintln!("[euchre] autoplay: seated at table {}", self.code.as_deref().unwrap_or("?"));
+            if self.autoplay || std::env::var_os("EUCHRE_SCENE").is_some() {
+                // Debug runs: what netcheck needs to join (the code) or knock (the handle).
+                eprintln!(
+                    "[euchre] seated at table {}, handle {}",
+                    self.code.as_deref().unwrap_or("?"),
+                    self.handle.as_deref().unwrap_or("?")
+                );
             }
             self.set_stage(Stage::Seated, shared);
         }
@@ -435,12 +553,19 @@ impl Lobby {
 }
 
 /// Middle of the little table in the seated view.
-const SEATS_Y: f32 = 204.0;
+const SEATS_Y: f32 = 218.0;
+/// The private / public line under the code.
+const PRIVACY_Y: f32 = 144.0;
+/// The host's MAKE PUBLIC button, after the note.
+const PRIVACY_BUTTON_W: f32 = 88.0;
+const PRIVACY_GAP: f32 = 10.0;
+/// Middle of a request to join, drawn over the felt.
+const KNOCK_Y: f32 = SEATS_Y - 2.0;
 
 /// Where each seat's plate sits in the seated view (relative seats: you at the bottom).
 fn seat_pos(seat: usize) -> Vec2 {
     let c = vec2(CX, SEATS_Y);
-    [c + vec2(0.0, 44.0), c + vec2(-122.0, -6.0), c + vec2(0.0, -50.0), c + vec2(122.0, -6.0)][seat]
+    [c + vec2(0.0, 44.0), c + vec2(-126.0, -6.0), c + vec2(0.0, -48.0), c + vec2(126.0, -6.0)][seat]
 }
 
 impl Scene for Lobby {
@@ -485,6 +610,7 @@ impl Scene for Lobby {
             Stage::Entry(Field::Code) => "JOIN A TABLE",
             Stage::Entry(Field::Name) => "YOUR NAME",
             Stage::Connecting => "PLAY ONLINE",
+            Stage::Knocking => "KNOCK KNOCK",
             Stage::Seated => "YOUR TABLE",
             Stage::Failed(_) => "NO LUCK",
         };
@@ -526,14 +652,31 @@ impl Scene for Lobby {
                     .center()
                     .draw(g, font);
             }
+            Stage::Knocking => {
+                let dots = ".".repeat(1 + (self.age * 3.0) as usize % 3);
+                Text::new("You asked to join this table.", CX, 150.0).color(palette::CREAM).center().draw(g, font);
+                Text::new(&format!("Waiting for the host to let you in{dots}"), CX, 170.0)
+                    .color(palette::MUTED)
+                    .center()
+                    .draw(g, font);
+            }
             Stage::Seated => {
                 if let Some(code) = &self.code {
-                    Text::new("TABLE CODE", CX, 80.0).color(palette::MUTED).center().draw(g, font);
+                    Text::new("TABLE CODE", CX, 76.0).color(palette::MUTED).center().draw(g, font);
                     let letters: Vec<char> = code.chars().collect();
-                    draw_tiles(g, shared, &letters, 5, 106.0, 99.0);
-                    Text::new("Friends choose PLAY ONLINE, then JOIN WITH A CODE.", CX, 134.0)
+                    draw_tiles(g, shared, &letters, 5, 100.0, 99.0);
+                    Text::new("Anyone with the code can sit right down.", CX, 126.0)
                         .color(palette::MUTED)
                         .center()
+                        .draw(g, font);
+                }
+                if let Some(s) = &self.seats {
+                    let (tag, rest) = self.privacy_note();
+                    let left = self.privacy_left(shared);
+                    let color = if s.public { palette::GOLD } else { palette::CREAM };
+                    Text::new(tag, left, PRIVACY_Y).color(color).draw(g, font);
+                    Text::new(rest, left + font.width(&format!("{tag}  ")), PRIVACY_Y)
+                        .color(palette::MUTED)
                         .draw(g, font);
                 }
                 // A little felt oval with the four seats around it.
@@ -572,12 +715,33 @@ impl Scene for Lobby {
                         Text::new(&label, p.x, p.y).color(color).center().draw(g, font);
                     }
                 }
+                if self.knock_showing() {
+                    let k = &self.knocks[0];
+                    let more = if self.knocks.len() > 1 { format!(" (+{})", self.knocks.len() - 1) } else { String::new() };
+                    let line = format!("{} asks to join{more}", k.name);
+                    let card = Rect::centered(CX, KNOCK_Y, (font.width(&line) + 20.0).max(164.0), 50.0);
+                    g.set_color(palette::INK);
+                    ui::chamfer(g, Fill, card.x - 1.0, card.y - 1.0, card.w + 2.0, card.h + 4.0, 6.0);
+                    g.set_color(palette::PANEL_DARK);
+                    ui::chamfer(g, Fill, card.x, card.y, card.w, card.h, 5.0);
+                    g.set_color(palette::BRASS);
+                    ui::chamfer(g, Line, card.x + 2.0, card.y + 2.0, card.w - 4.0, card.h - 4.0, 4.0);
+                    Text::new(&line, CX, KNOCK_Y - 12.0)
+                        .color(palette::CREAM)
+                        .center()
+                        .draw(g, font);
+                }
             }
             Stage::Failed(why) => {
                 for (i, line) in font.wrap(why, PANEL.w - 60.0).iter().enumerate() {
                     Text::new(line, CX, 150.0 + i as f32 * 14.0).color(palette::CREAM).center().draw(g, font);
                 }
-                Text::new("Check your connection and try again.", CX, 190.0)
+                let advice = if why == ErrorCode::Declined.describe() {
+                    "Ask them for the table code instead."
+                } else {
+                    "Check your connection and try again."
+                };
+                Text::new(advice, CX, 190.0)
                     .color(palette::MUTED)
                     .center()
                     .draw(g, font);
@@ -635,7 +799,8 @@ impl Scene for Lobby {
             return Transition::None;
         }
         if key == Key::Escape {
-            let back = if matches!(self.stage, Stage::Seated | Stage::Connecting) { Act::Leave } else { Act::Back };
+            let back =
+                if matches!(self.stage, Stage::Seated | Stage::Connecting | Stage::Knocking) { Act::Leave } else { Act::Back };
             return self.press(back, shared);
         }
         Transition::None
@@ -659,7 +824,7 @@ impl Scene for Lobby {
                 return match self.stage {
                     // B deletes while typing, and backs out once the field is empty.
                     Stage::Entry(_) if !self.entry.is_empty() => self.press(Act::Erase, shared),
-                    Stage::Seated | Stage::Connecting => self.press(Act::Leave, shared),
+                    Stage::Seated | Stage::Connecting | Stage::Knocking => self.press(Act::Leave, shared),
                     _ => self.press(Act::Back, shared),
                 };
             }

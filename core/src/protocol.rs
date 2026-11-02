@@ -10,6 +10,13 @@
 //! Hidden information never leaves the room: a player is only ever sent their
 //! own cards, plus each card as it is played. The dealer's discard is shown
 //! only to the dealer.
+//!
+//! Getting in: a room has a short **code** and a long **handle**. The code is
+//! the invitation: whoever has it sits straight down (`/join/{CODE}`). The
+//! handle is what Steam shows a player's friends ("Join Game"); it can't be
+//! turned back into the code. Joining by handle (`/knock/{HANDLE}`) only asks
+//! to join: the host lets the player in or turns them away ([`ServerMsg::Knocks`],
+//! [`ClientMsg::Answer`]), unless the host has made the table public.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +24,7 @@ use crate::card::{Card, Suit};
 use crate::round::{Action, RuleError, Seat};
 
 /// Bumped whenever a message changes shape. A room refuses other versions.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Longest player name, in characters.
 pub const MAX_NAME_LEN: usize = 10;
@@ -43,6 +50,10 @@ pub enum ClientMsg {
     Resync,
     /// Leaving for good: a bot takes the seat.
     Leave,
+    /// Host only: public tables let anyone with the handle sit down without asking.
+    SetPublic { public: bool },
+    /// Host only: let a player who asked to join in, or turn them away.
+    Answer { id: u32, accept: bool },
 }
 
 /// From a room to one player.
@@ -50,7 +61,12 @@ pub enum ClientMsg {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
     /// You're in. Keep `token` to get your seat back if you reconnect.
-    Welcome { room: String, token: String },
+    /// `handle` is what to show friends (see the module docs), never the code.
+    Welcome { room: String, token: String, handle: String },
+    /// Your request to join was passed on to the host; wait for their answer.
+    Waiting,
+    /// To the host: who is asking to join (every time the list changes).
+    Knocks { requests: Vec<KnockInfo> },
     /// Who sits where (relative seats), sent whenever that changes.
     Seats(SeatsInfo),
     /// A new hand was dealt.
@@ -68,6 +84,10 @@ pub struct SeatsInfo {
     pub seats: [SeatInfo; 4],
     /// A game is being played (seats are fixed until it ends).
     pub playing: bool,
+    /// Players asking to join by handle sit straight down.
+    pub public: bool,
+    /// The seat (relative) that answers requests and sets `public`.
+    pub host: Option<Seat>,
     pub target: u32,
     pub stick_the_dealer: bool,
 }
@@ -87,6 +107,13 @@ pub enum SeatKind {
     /// A player whose connection dropped. Their seat waits for them; if
     /// they're due to act for too long, a bot moves for them.
     Away,
+}
+
+/// Someone asking to join.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnockInfo {
+    pub id: u32,
+    pub name: String,
 }
 
 /// The start of a hand, from one player's point of view.
@@ -152,6 +179,8 @@ pub enum ErrorCode {
     Rule(RuleError),
     /// A message that couldn't be read.
     BadMessage,
+    /// The host turned down your request to join.
+    Declined,
 }
 
 impl ErrorCode {
@@ -164,6 +193,7 @@ impl ErrorCode {
             ErrorCode::NotAllowed => "You can't do that right now.",
             ErrorCode::Rule(_) => "That move isn't allowed.",
             ErrorCode::BadMessage => "The server didn't understand that.",
+            ErrorCode::Declined => "The host didn't let you in this time.",
         }
     }
 }
@@ -185,6 +215,12 @@ pub fn clean_name(name: &str) -> String {
 pub fn clean_code(code: &str) -> Option<String> {
     let code = code.trim().to_ascii_uppercase();
     (code.len() == CODE_LEN && code.bytes().all(|b| CODE_ALPHABET.contains(&b))).then_some(code)
+}
+
+/// Checks a room handle (64 lowercase hex digits, a Durable Object id).
+pub fn clean_handle(handle: &str) -> Option<String> {
+    let h = handle.trim().to_ascii_lowercase();
+    (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then_some(h)
 }
 
 /// A room code from random numbers (one per letter).

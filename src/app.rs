@@ -142,8 +142,8 @@ impl App {
         crate::platform::init();
         // Debug: `EUCHRE_SCENE=table|continue|online|options|rules` jumps straight to a screen (for screenshots).
         let scene: Box<dyn Scene> = match std::env::var("EUCHRE_SCENE").as_deref() {
-            // Launched from a friend's Steam invite (`+connect CODE`).
-            _ if let Some(code) = crate::platform::take_join_request() => Box::new(Lobby::join(&shared, &code)),
+            // Launched from a friend's Steam invite or "Join Game".
+            _ if let Some(request) = crate::platform::take_join_request() => Box::new(Lobby::from_request(&shared, request)),
             Ok("table") => Box::new(Table::new(&shared)),
             Ok("online") => Box::new(Lobby::new(&shared)),
             Ok("host") => Box::new(Lobby::host(&shared)),
@@ -308,12 +308,12 @@ impl Game for App {
         self.poll_directions(ctx, real_dt);
         (self.shared.mouse, self.shared.mouse_down) = self.pointer(ctx);
         crate::platform::update();
-        if let Some(code) = crate::platform::take_join_request() {
-            // A friend's invite accepted from the Steam overlay: leave whatever
-            // we're doing (an offline game is saved) and go to their table.
+        if let Some(request) = crate::platform::take_join_request() {
+            // A friend's invite (or "Join Game") from the Steam overlay: leave
+            // whatever we're doing (an offline game is saved) and go to their table.
             self.scene.suspend(&mut self.shared);
             self.shared.settings.save();
-            let lobby = Lobby::join(&self.shared, &code);
+            let lobby = Lobby::from_request(&self.shared, request);
             self.apply(ctx, Transition::Switch(Box::new(lobby)));
         }
         let t = self.scene.update(&mut self.shared, ctx, dt);

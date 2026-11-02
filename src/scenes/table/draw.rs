@@ -59,7 +59,8 @@ impl Table {
             // The panel wraps however many buttons there are (online adds INVITE FRIENDS).
             let first = p.buttons.first().map_or(144.0, |(_, b)| b.rect.y);
             let last = p.buttons.last().map_or(222.0, |(_, b)| b.rect.y + b.rect.h);
-            let panel = Rect::new(CENTER.x - 80.0, first - 47.0, 160.0, last - first + 68.0);
+            let w = p.buttons.first().map_or(120.0, |(_, b)| b.rect.w) + 40.0;
+            let panel = Rect::new(CENTER.x - w / 2.0, first - 47.0, w, last - first + 68.0);
             let c = panel.center();
             g.translate(c.x, c.y);
             g.scale(p.pop.value, p.pop.value);
