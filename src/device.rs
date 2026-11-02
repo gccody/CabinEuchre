@@ -14,7 +14,7 @@ pub const NATIVE_MOBILE: bool = cfg!(any(target_os = "android", target_os = "ios
 /// Whether to use the phone and tablet layouts.
 pub fn mobile() -> bool {
     static MOBILE: OnceLock<bool> = OnceLock::new();
-    *MOBILE.get_or_init(|| NATIVE_MOBILE || std::env::var("EUCHRE_MOBILE").is_ok_and(|v| v == "1"))
+    *MOBILE.get_or_init(|| NATIVE_MOBILE || (cfg!(debug_assertions) && std::env::var("EUCHRE_MOBILE").is_ok_and(|v| v == "1")))
 }
 
 /// Whether the back gesture (`Key::Escape` on the title screen) should quit.
@@ -24,9 +24,12 @@ pub fn back_quits() -> bool {
 }
 
 /// A debug switch (see the table in `CLAUDE.md`): the environment, or on a
-/// debug build for a phone, where nothing can set one, a `KEY=value` line in
-/// `euchre-debug.txt` in the save directory.
+/// phone, where nothing can set one, a `KEY=value` line in `euchre-debug.txt`
+/// in the save directory. Release builds have no debug switches.
 pub fn var(name: &str) -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
     std::env::var(name).ok().or_else(|| debug_file(name))
 }
 

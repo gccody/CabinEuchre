@@ -374,9 +374,11 @@ impl Scene for Title {
         }
         match key {
             Key::Escape if device::back_quits() => Transition::Quit,
+            // The top button: CONTINUE when there's a save, never a new game over it.
             Key::Enter | Key::Space => {
+                let choice = self.buttons[0].0;
                 self.buttons[0].1.flash(&shared.sfx);
-                self.choose(shared, Choice::Play)
+                self.choose(shared, choice)
             }
             _ => Transition::None,
         }

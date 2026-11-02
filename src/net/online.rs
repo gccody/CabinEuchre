@@ -13,19 +13,23 @@ use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 use crate::euchre::protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
+use crate::net::seat_memory;
 
 /// Where `wrangler dev` serves the room server (see `server/README.md`).
 pub const DEFAULT_SERVER: &str = "ws://127.0.0.1:8787";
 
 /// The room server's base URL (`ws://` or `wss://`, no trailing slash).
 pub fn server_url() -> String {
-    crate::device::var("EUCHRE_SERVER")
+    std::env::var("EUCHRE_SERVER")
+        .ok()
+        .or_else(|| crate::device::var("EUCHRE_SERVER"))
         .or(option_env!("EUCHRE_SERVER").map(str::to_string))
         .unwrap_or_else(|| DEFAULT_SERVER.to_string())
         .trim_end_matches('/')
@@ -70,6 +74,7 @@ pub struct Connection {
     room: Option<String>,
     handle: Option<String>,
     inbox: VecDeque<ServerMsg>,
+    thread: JoinHandle<()>,
 }
 
 impl Connection {
@@ -81,11 +86,26 @@ impl Connection {
         let name = name.to_string();
         let server = server_url();
         let query = create_query.to_string();
-        std::thread::Builder::new()
+        // Back to a table we hold a seat at, even after the game was killed.
+        let token = match &join {
+            Join::Code(code) => seat_memory::token_for(code),
+            _ => None,
+        };
+        let thread = std::thread::Builder::new()
             .name("euchre-net".into())
-            .spawn(move || run(server, join, query, name, command_rx, event_tx))
+            .spawn(move || run(server, join, token, query, name, command_rx, event_tx))
             .expect("spawn the network thread");
-        Connection { commands, events, status: Status::Connecting, room: None, handle: None, inbox: VecDeque::new() }
+        Connection { commands, events, status: Status::Connecting, room: None, handle: None, inbox: VecDeque::new(), thread }
+    }
+
+    /// Closes the connection and waits a moment for the thread to finish, so
+    /// what was queued (a `Leave`) gets out before the game exits.
+    pub fn finish(&mut self, within: Duration) {
+        let _ = self.commands.send(Command::Close);
+        let until = Instant::now() + within;
+        while !self.thread.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     pub fn send(&mut self, msg: ClientMsg) {
@@ -99,9 +119,10 @@ impl Connection {
             match self.events.try_recv() {
                 Ok(Event::Status(s)) => self.status = s,
                 Ok(Event::Msg(msg)) => {
-                    if let ServerMsg::Welcome { room, handle, .. } = &msg {
+                    if let ServerMsg::Welcome { room, handle, token } = &msg {
                         self.room = Some(room.clone());
                         self.handle = Some(handle.clone());
+                        seat_memory::remember(room, token);
                     }
                     self.inbox.push_back(msg);
                 }
@@ -153,8 +174,15 @@ enum Ended {
     Dropped,
 }
 
-fn run(server: String, mut join: Join, query: String, name: String, commands: Receiver<Command>, events: Sender<Event>) {
-    let mut token: Option<String> = None;
+fn run(
+    server: String,
+    mut join: Join,
+    mut token: Option<String>,
+    query: String,
+    name: String,
+    commands: Receiver<Command>,
+    events: Sender<Event>,
+) {
     let mut failures = 0u32;
     let mut was_connected = false;
     loop {
@@ -186,7 +214,8 @@ fn run(server: String, mut join: Join, query: String, name: String, commands: Re
                 }
             }
             Err(e) => {
-                crate::assets::log_warn(&format!("could not reach {url}: {e}"));
+                // Not the whole address: it holds the table's code.
+                crate::assets::log_warn(&format!("could not reach {server}: {e}"));
             }
         }
         failures += 1;
@@ -294,6 +323,9 @@ fn serve(
                         code: code @ (ErrorCode::NoSuchRoom | ErrorCode::RoomFull | ErrorCode::Version | ErrorCode::Declined),
                         ..
                     } => {
+                        if let (Join::Code(table), false) = (&*join, *code == ErrorCode::Version) {
+                            seat_memory::forget_table(table);
+                        }
                         return Ended::Refused(code.describe().into());
                     }
                     _ => {}

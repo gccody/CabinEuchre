@@ -44,6 +44,7 @@ fn main() -> love2drs::Result {
     // the mobile layouts on a desktop (with `EUCHRE_MOBILE=1`).
     let (w, h) = std::env::var("EUCHRE_WINDOW")
         .ok()
+        .filter(|_| cfg!(debug_assertions))
         .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
         .unwrap_or((1280, 720));
     let conf = Conf::new("Euchre")

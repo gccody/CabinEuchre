@@ -107,7 +107,9 @@ impl View {
 /// Canvas size in pixels for a view: the physical size of the visible area,
 /// but never below `DENSITY` (so pixel art is never minified).
 fn canvas_size(view: View, dpi: f32) -> (u32, u32) {
-    let density = (view.scale * dpi).clamp(DENSITY, MAX_CANVAS_W / view.visible.w);
+    // The limit wins over DENSITY only for absurdly wide windows, which then get a
+    // canvas wider than MAX_CANVAS_W rather than a crash.
+    let density = (view.scale * dpi).clamp(DENSITY, (MAX_CANVAS_W / view.visible.w).max(DENSITY));
     ((view.visible.w * density).round() as u32, (view.visible.h * density).round() as u32)
 }
 

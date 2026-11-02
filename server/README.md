@@ -36,6 +36,16 @@ knock is turned away.
 The host can send `SetPublic { public: true }`: knocks then sit straight down, and anyone already
 waiting is let in. `Seats` carries `public` and `host` so every player's lobby shows it.
 
+### Limits and clean-up
+
+New connections are limited to 60 a minute per address (`[[ratelimits]]` in `wrangler.toml`), so
+short room codes can't be guessed quickly. If the limiter itself fails, players are let in. A table
+holds at most 8 waiting requests to join.
+
+The room's one alarm covers everything that happens with nobody sending a message: a bot moves for a
+player who runs out of time (60 s a turn, 15 s after a drop), a person away for 10 minutes loses the
+seat, and a room is deleted after an hour empty or a day idle. The timings are in `core/src/room.rs`.
+
 ## Run it locally
 
 Needs Rust with the `wasm32-unknown-unknown` target, `worker-build`
@@ -89,7 +99,7 @@ covers a great deal. What keeps it cheap:
   It's reloaded from storage when the next message arrives.
 - **Bots move instantly** on the server. The players' games add the "thinking" pauses while they
   animate, so a room is awake for milliseconds per message.
-- **No timers while waiting.** The only alarm is the turn timer (45 s, or 15 s for a player whose
+- **No timers while waiting.** The only alarm is the turn timer (60 s, or 15 s for a player whose
   connection dropped) and room expiry (1 hour after everyone leaves, 24 hours without a message).
 - A game to 10 is roughly 300 small messages and a few hundred storage writes.
 

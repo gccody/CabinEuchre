@@ -55,12 +55,13 @@ the monitor's refresh rate.
 | `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down |
 | `EUCHRE_TARGET=n` | override points to win (1 reaches the game-over screen quickly) |
 | `EUCHRE_INPUT=pad\|touch` | start as if that device was used last (screenshots of the gamepad focus highlight and pad hints without a controller) |
-| `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file and the saved game, so screenshots don't depend on the player's options or a game they left |
+| `EUCHRE_DEFAULT_SETTINGS=1` | ignore (and never write) the settings file, the saved game and the remembered online seat, so screenshots don't depend on the player's options or a game they left |
 | `EUCHRE_MOBILE=1` | use the phone and tablet layouts on the desktop (read from the environment only) |
 | `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |
 | `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units) |
 
-Nothing can set environment variables on a phone, so debug builds there also read `KEY=value` lines
+These only work in debug builds, except `EUCHRE_SERVER`, which any build reads. Nothing can set
+environment variables on a phone, so debug builds there also read `KEY=value` lines
 from `euchre-debug.txt` in the save directory (Android: `files/`, via `adb shell run-as`; iOS: the app
 container's `Documents/`). The lobby's `[euchre] seated at table` line goes to logcat on Android.
 
@@ -78,7 +79,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
 | `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
-| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token) |
+| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed |
 | `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). No-ops without it |
 | `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, private/public, seats, LET IN / NO, DEAL, INVITE, LEAVE), waiting for the host after a knock. Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
@@ -141,10 +142,24 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   seated; `Room::pass_host` moves the job on) to answer, unless the host made the table public.
   Never put the code in rich presence or anywhere friends can see it. The host answers in the
   lobby (a LET IN / NO card over the felt) or, mid-game, in the pause menu (MENU shows the count).
+- **A connection holds a seat's token, never a seat number** (`Attachment` in `server/src/lib.rs`).
+  The room says where a token sits (`Room::seat_of_token`, `Room::token_at`), so a player's
+  connection follows them through SIT HERE, and one left open after `Leave` holds nothing.
+- **The host's job stays with someone connected** (`Room::check_host`): it moves on when the host's
+  connection drops. With nobody connected, waiting requests are turned away, and an empty private
+  table refuses new ones rather than handing itself to whoever knocks first.
 - The room server (`server/src/lib.rs`) only moves messages, saves the room after every change
-  (it may hibernate at any moment) and keeps one alarm for turn timeouts (45 s; 15 s while
-  disconnected) and room expiry. Keep it timer-free otherwise: bots move instantly there, and the
-  games add the pauses.
+  (it may hibernate at any moment) and keeps one alarm for turn timeouts and room expiry. Keep it
+  timer-free otherwise: bots move instantly there, and the games add the pauses. A number passed to
+  `set_alarm` is a delay from now, not a time of day.
+- Timing lives in `core/src/room.rs`, as pure code over times the server passes in. `TurnClock`: 60 s
+  a turn, 15 s from a drop, at least 15 s after coming back, and never past 120 s. A person away for
+  10 minutes (`AWAY_SEAT_MS`) loses the seat to a bot. A timed-out player sees "Out of time!".
+- Connections are limited to 60 a minute per address (`[[ratelimits]]` in `server/wrangler.toml`,
+  `allowed` in the server), so short room codes can't be guessed quickly. Requests to join at one
+  table are capped at `MAX_KNOCKS`.
+- Closing the game on purpose sends `Leave`. Being killed doesn't, so the seat stays for a while,
+  and PLAY ONLINE offers REJOIN TABLE. Typing the same code again finds the same seat too.
 - Online tables differ only a little: the result banner moves on by itself after 7 s, PLAY AGAIN
   asks the room for a new game, the pause menu says LEAVE TABLE (a bot takes the seat) and adds
   INVITE FRIENDS on Steam, and the table code shows above MENU.

@@ -442,3 +442,127 @@ fn the_host_job_moves_on() {
     assert_eq!(room.host(), None);
     assert_eq!(room.take_declined(), vec![1]);
 }
+
+#[test]
+fn a_token_follows_its_player() {
+    let mut room = Room::new("SEATS", "handle", 10, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    room.take_outbox();
+    room.handle(ann, ClientMsg::Sit { seat: 1 }, 0);
+    let moved = room.seat_of_token("a").unwrap();
+    assert_ne!(moved, ann);
+    assert_eq!(room.token_at(moved), Some("a"));
+    assert_eq!(room.token_at(ann), None, "a bot sits there now");
+    // Whatever goes out afterwards is addressed to the new seat, which the token finds.
+    assert!(room.take_outbox().iter().all(|o| o.to == moved));
+    room.handle(moved, ClientMsg::Start, 7);
+    assert!(room.take_outbox().iter().any(|o| o.to == moved && matches!(o.msg, ServerMsg::Deal(_))));
+}
+
+#[test]
+fn leaving_ends_a_tokens_claim() {
+    let mut room = Room::new("LEAVE", "handle", 10, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    let bo = room.join(PROTOCOL_VERSION, "bo", None, "b").unwrap();
+    room.handle(bo, ClientMsg::Leave, 0);
+    assert_eq!(room.seat_of_token("b"), None, "a socket still holding this token has no seat now");
+    // The next person let in gets the same seat, under their own token.
+    room.knock(PROTOCOL_VERSION, "cy", None, 1, "c").unwrap();
+    room.handle(ann, ClientMsg::Answer { id: 1, accept: true }, 0);
+    let (_, cy) = room.take_admitted()[0];
+    assert_eq!(cy, bo);
+    assert_eq!(room.token_at(cy), Some("c"));
+    assert_eq!(room.seat_of_token("b"), None);
+}
+
+#[test]
+fn the_host_job_stays_with_someone_who_is_here() {
+    let mut room = Room::new("DROPS", "handle", 10, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    let bo = room.join(PROTOCOL_VERSION, "bo", None, "b").unwrap();
+    room.knock(PROTOCOL_VERSION, "cy", None, 1, "c").unwrap();
+    room.take_outbox();
+
+    // The host's connection drops: the request goes to the next person.
+    room.disconnected(ann);
+    assert_eq!(room.host(), Some(bo));
+    assert_eq!(knocks_for(&mut room, bo), Some(vec!["CY".to_string()]));
+    room.handle(bo, ClientMsg::Answer { id: 1, accept: false }, 0);
+    assert_eq!(room.take_declined(), vec![1]);
+
+    // Coming back doesn't take the job back from someone who's doing it.
+    room.join(PROTOCOL_VERSION, "ann", Some("a"), "x").unwrap();
+    assert_eq!(room.host(), Some(bo));
+
+    // Nobody here: requests are turned away instead of waiting forever...
+    room.knock(PROTOCOL_VERSION, "dee", None, 2, "d").unwrap();
+    room.disconnected(bo);
+    room.disconnected(ann);
+    assert_eq!(room.take_declined(), vec![2]);
+    assert_eq!(room.knock(PROTOCOL_VERSION, "eve", None, 3, "e"), Err(ErrorCode::Declined));
+    assert_eq!(room.humans(), 2, "...and an empty private table doesn't let a stranger take a seat");
+
+    // Whoever comes back first answers from then on.
+    room.join(PROTOCOL_VERSION, "ann", Some("a"), "x").unwrap();
+    assert_eq!(room.host(), Some(ann));
+    assert_eq!(room.knock(PROTOCOL_VERSION, "eve", None, 3, "e").unwrap(), None);
+}
+
+#[test]
+fn requests_to_join_are_capped() {
+    let mut room = Room::new("CROWD", "handle", 10, true);
+    room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    for id in 0..8 {
+        assert_eq!(room.knock(PROTOCOL_VERSION, "cy", None, id, "c").unwrap(), None);
+    }
+    assert_eq!(room.knock(PROTOCOL_VERSION, "cy", None, 9, "c"), Err(ErrorCode::RoomFull));
+}
+
+#[test]
+fn a_dropped_connection_gets_time_to_come_back() {
+    use crate::room::{AWAY_TURN_MS, LONGEST_TURN_MS, TURN_MS, TurnClock};
+    let clock = TurnClock::tick(None, 1, true, 1000.0);
+    assert_eq!(clock.deadline(), 1000.0 + TURN_MS);
+
+    // Dropping late in the turn still leaves the away time, counted from the drop.
+    let at_drop = 41_000.0;
+    let away = TurnClock::tick(Some(clock), 1, false, at_drop);
+    assert_eq!(away.deadline(), at_drop + AWAY_TURN_MS);
+
+    // Back with the normal limit nearly or fully gone: they still get time to move.
+    let at_back = 1000.0 + TURN_MS - 1000.0;
+    let back = TurnClock::tick(Some(away), 1, true, at_back);
+    assert_eq!(back.deadline(), at_back + AWAY_TURN_MS);
+
+    // Back early: the full turn is theirs again.
+    let early = TurnClock::tick(Some(TurnClock::tick(Some(clock), 1, false, 2000.0)), 1, true, 3000.0);
+    assert_eq!(early.deadline(), 1000.0 + TURN_MS);
+
+    // Dropping and returning can't stall the table forever.
+    let late = TurnClock::tick(Some(away), 1, true, 200_000.0);
+    assert_eq!(late.deadline(), 1000.0 + LONGEST_TURN_MS);
+
+    // A new turn starts over.
+    assert_eq!(TurnClock::tick(Some(away), 2, true, 70_000.0).deadline(), 70_000.0 + TURN_MS);
+}
+
+#[test]
+fn abandoned_seats_go_back_to_bots() {
+    let mut room = Room::new("GHOST", "handle", 10, true);
+    for (name, token) in [("ann", "a"), ("bo", "b"), ("cy", "c"), ("dee", "d")] {
+        room.join(PROTOCOL_VERSION, name, None, token).unwrap();
+    }
+    assert_eq!(room.join(PROTOCOL_VERSION, "eve", None, "e"), Err(ErrorCode::RoomFull));
+
+    let dee = room.seat_of_token("d").unwrap();
+    room.release_seat(dee);
+    assert_eq!(room.humans(), 4, "only a disconnected seat can be released");
+    room.disconnected(dee);
+    assert!(room.is_away(dee));
+    room.release_seat(dee);
+    assert_eq!(room.seat_of_token("d"), None);
+
+    // The table has room again, and the old token just gets a new seat if one's free.
+    assert_eq!(room.join(PROTOCOL_VERSION, "eve", None, "e").unwrap(), dee);
+    assert_eq!(room.join(PROTOCOL_VERSION, "dee", Some("d"), "dd"), Err(ErrorCode::RoomFull));
+}

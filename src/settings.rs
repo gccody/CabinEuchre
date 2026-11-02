@@ -131,7 +131,9 @@ impl Settings {
             self.rumble,
             self.name
         );
-        if let Err(e) = std::fs::write(&path, text) {
+        // Write beside the file and rename, so a crash mid-write can't lose the settings.
+        let tmp = path.with_extension("tmp");
+        if let Err(e) = std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)) {
             crate::assets::log_warn(&format!("could not save settings: {e}"));
         }
     }

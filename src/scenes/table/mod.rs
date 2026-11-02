@@ -33,6 +33,7 @@ mod draw;
 mod layout;
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use love2drs::prelude::*;
 
@@ -42,7 +43,7 @@ use crate::euchre::{
     Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
 };
 use crate::juice::Spring;
-use crate::net::{Link, LocalTable};
+use crate::net::{Link, LocalTable, Status, seat_memory};
 use crate::palette;
 use crate::savegame;
 use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
@@ -491,6 +492,10 @@ impl Table {
     /// Takes everything the room has sent. Seat changes and errors apply at
     /// once; anything about the hand waits in `pending` for the animation.
     fn pump_link(&mut self, shared: &mut Shared) {
+        if self.link.status() != Status::Connected {
+            // A PLAY AGAIN sent just as the connection died never got there.
+            self.rematch_asked = false;
+        }
         while let Some(msg) = self.link.poll() {
             match msg {
                 ServerMsg::Seats(s) => {
@@ -526,6 +531,10 @@ impl Table {
             ServerMsg::Sync { hand, moves } => self.lay_out(&hand, &moves),
             ServerMsg::Acted(mv) => {
                 if self.resyncing {
+                    return;
+                }
+                if mv.seat > 3 {
+                    self.request_resync();
                     return;
                 }
                 let think = if mv.seat == HUMAN {
@@ -846,11 +855,17 @@ impl Table {
     /// Decides what happens next when the timeline is idle.
     fn drive(&mut self, shared: &Shared) {
         if self.game_over.is_some() {
-            // Online: someone asked for another game and the room dealt it.
-            let rematch = match self.pending.front() {
-                Some(ServerMsg::Deal(h) | ServerMsg::Sync { hand: h, .. }) => h.game != self.game.game,
+            // Online: someone asked for another game and the room dealt it. Anything
+            // else (a reconnect's resend of this game) has nothing left to show,
+            // and mustn't hold up a new deal queued behind it.
+            let is_rematch = |m: &ServerMsg, game| match m {
+                ServerMsg::Deal(h) | ServerMsg::Sync { hand: h, .. } => h.game != game,
                 _ => false,
             };
+            while self.pending.front().is_some_and(|m| !is_rematch(m, self.game.game)) {
+                self.pending.pop_front();
+            }
+            let rematch = !self.pending.is_empty();
             if rematch {
                 self.game_over = None;
                 self.rematch_asked = false;
@@ -931,6 +946,10 @@ impl Table {
                     self.swap_cards(a, b);
                 }
                 self.show_action(mv.seat, action, before, dealer, shared);
+                if mv.seat == HUMAN {
+                    // A speech bubble: the next seat's move clears any hint at once.
+                    self.cue(Cue::Say(HUMAN, "Out of time!".into()));
+                }
             }
             Err(e) => {
                 crate::assets::log_warn(&format!("move {mv:?} doesn't fit this table ({e:?}); resyncing"));
@@ -1155,6 +1174,11 @@ impl Table {
 
     fn new_game(&mut self, shared: &Shared) {
         if self.link.is_online() {
+            if self.link.status() != Status::Connected {
+                // It would never get there; ask again once we're back.
+                self.hint = Some(("Reconnecting. Try again in a moment.".into(), 3.0));
+                return;
+            }
             // Everyone at the table gets the new deal; `drive` lays it out.
             if !self.rematch_asked {
                 self.rematch_asked = true;
@@ -1170,6 +1194,7 @@ impl Table {
     fn quit_to_title(&mut self, shared: &mut Shared) -> Transition {
         if self.link.is_online() {
             self.link.send(ClientMsg::Leave);
+            seat_memory::forget();
             crate::platform::set_presence(None);
         } else {
             self.save();
@@ -1676,8 +1701,11 @@ impl Scene for Table {
 
     fn suspend(&mut self, _shared: &mut Shared) {
         if self.link.is_online() {
-            // Closing the game: a bot takes the seat right away.
+            // Closing the game: a bot takes the seat right away, if the
+            // message gets out before the process is gone.
             self.link.send(ClientMsg::Leave);
+            self.link.finish(Duration::from_millis(300));
+            seat_memory::forget();
             crate::platform::set_presence(None);
         } else {
             self.save();

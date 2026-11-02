@@ -25,7 +25,7 @@ use crate::device;
 use crate::euchre::protocol::{ClientMsg, ErrorCode, KnockInfo, SeatKind, SeatsInfo, ServerMsg, clean_code};
 use crate::juice::Spring;
 use crate::net::online::Join;
-use crate::net::{Connection, Link, Status};
+use crate::net::{Connection, Link, Status, seat_memory};
 use crate::palette;
 use crate::platform;
 use crate::scene::{InputMode, Nav, Scene, Shared, Transition};
@@ -75,6 +75,8 @@ enum Stage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Act {
+    /// Back to the table we still hold a seat at.
+    Rejoin,
     Host,
     JoinCode,
     Name,
@@ -222,6 +224,10 @@ impl Lobby {
         let bottom = PANEL.y + PANEL.h - 26.0;
         match &self.stage {
             Stage::Menu => {
+                if let Some(code) = seat_memory::code() {
+                    let label = format!("REJOIN TABLE {code}");
+                    b.push((Act::Rejoin, Button::new(label, Rect::centered(CX, 85.0, 160.0, 20.0), palette::ORANGE, palette::ORANGE_DARK)));
+                }
                 b.push((Act::Host, Button::brass("HOST A TABLE", Rect::centered(CX, 124.0, 160.0, 26.0)).scaled(1.5)));
                 b.push((Act::JoinCode, Button::blue("JOIN WITH A CODE", Rect::centered(CX, 164.0, 160.0, 20.0))));
                 b.push((Act::Name, Button::green("CHANGE NAME", Rect::centered(CX, 236.0, 110.0, 18.0))));
@@ -313,6 +319,10 @@ impl Lobby {
         };
         match &self.stage {
             Stage::Menu => {
+                if let Some(code) = seat_memory::code() {
+                    let label = format!("REJOIN TABLE {code}");
+                    b.push((Act::Rejoin, Button::new(label, Rect::centered(CX, 62.0, 300.0, 38.0), palette::ORANGE, palette::ORANGE_DARK).scaled(1.2)));
+                }
                 b.push((Act::Host, Button::brass("HOST A TABLE", Rect::centered(CX, 108.0, 300.0, 46.0)).scaled(2.0)));
                 b.push((Act::JoinCode, Button::blue("JOIN WITH A CODE", Rect::centered(CX, 160.0, 300.0, 42.0)).scaled(1.5)));
                 b.push((Act::Name, Button::green("CHANGE NAME", Rect::centered(CX, 240.0, 220.0, 40.0)).scaled(1.5)));
@@ -430,6 +440,11 @@ impl Lobby {
     fn press(&mut self, act: Act, shared: &mut Shared) -> Transition {
         shared.tap();
         match act {
+            Act::Rejoin => {
+                if let Some(code) = seat_memory::code() {
+                    self.connect(Join::Code(code), shared);
+                }
+            }
             Act::Host => self.connect(Join::Create, shared),
             Act::JoinCode => {
                 self.entry.clear();
@@ -493,6 +508,7 @@ impl Lobby {
                     link.send(ClientMsg::Leave);
                 }
                 self.link = None;
+                seat_memory::forget();
                 platform::set_presence(None);
                 self.set_stage(Stage::Menu, shared);
             }
@@ -598,6 +614,15 @@ impl Lobby {
                 );
             }
             self.set_stage(Stage::Seated, shared);
+            // Start on DEAL, not on something a second press would change by accident.
+            self.focus = self.buttons.iter().position(|(a, _)| *a == Act::Deal).unwrap_or(0);
+        }
+        if self.stage == Stage::Seated
+            && matches!(self.link.as_ref().map(Link::status), Some(Status::Connecting | Status::Reconnecting))
+        {
+            // Whatever we pressed while the connection was down never got there.
+            self.dealing = false;
+            self.note = Some(("Reconnecting...".into(), 0.3));
         }
         if let Some(Status::Failed(why)) = self.link.as_ref().map(Link::status) {
             self.link = None;
@@ -723,8 +748,11 @@ impl Scene for Lobby {
 
         match &self.stage {
             Stage::Menu => {
-                Text::new("Play with friends on any device.", CX, 78.0 - lift).color(palette::MUTED).center().draw(g, font);
-                Text::new("Bots fill the empty seats.", CX, 92.0 - lift).color(palette::MUTED).center().draw(g, font);
+                // REJOIN takes this spot when there's a seat to go back to.
+                if !self.buttons.iter().any(|(a, _)| *a == Act::Rejoin) {
+                    Text::new("Play with friends on any device.", CX, 78.0 - lift).color(palette::MUTED).center().draw(g, font);
+                    Text::new("Bots fill the empty seats.", CX, 92.0 - lift).color(palette::MUTED).center().draw(g, font);
+                }
                 let name = shared.settings.player_name();
                 let name_y = if mobile { 200.0 } else { 210.0 };
                 let inset = Rect::centered(CX, name_y, 200.0, 20.0);

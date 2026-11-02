@@ -9,6 +9,9 @@
 
 pub mod local;
 pub mod online;
+pub mod seat_memory;
+
+use std::time::Duration;
 
 use crate::euchre::Match;
 use crate::euchre::protocol::{ClientMsg, ServerMsg};
@@ -53,6 +56,14 @@ impl Link {
         match self {
             Link::Local(_) => Status::Connected,
             Link::Online(c) => c.status(),
+        }
+    }
+
+    /// Gives the connection a moment to send what's queued, for when the game is
+    /// about to exit and a thread still working would be cut off.
+    pub fn finish(&mut self, within: Duration) {
+        if let Link::Online(c) = self {
+            c.finish(within);
         }
     }
 

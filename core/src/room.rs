@@ -39,6 +39,60 @@ pub const BOT_NAMES: [&str; 4] = ["OTTO", "ROSA", "BENNY", "JULES"];
 /// Where joining players sit: the first two are partners.
 const JOIN_ORDER: [Seat; 4] = [0, 2, 1, 3];
 
+/// How many requests to join may wait at once, so nobody can bury the host in them.
+const MAX_KNOCKS: usize = 8;
+
+/// How long a connected player may think before a bot moves for them. This
+/// starts when the room is ready, a little before the player's game has finished
+/// showing the deal and the bots' moves, so it allows for that too.
+pub const TURN_MS: f64 = 60_000.0;
+/// How long a turn waits for a disconnected player, from when they dropped.
+/// Also how long someone who just came back gets, at the least.
+pub const AWAY_TURN_MS: f64 = 15_000.0;
+/// No turn runs past this, however often its player drops and comes back.
+pub const LONGEST_TURN_MS: f64 = 120_000.0;
+/// A person who stays disconnected this long loses their seat to a bot.
+pub const AWAY_SEAT_MS: f64 = 10.0 * 60_000.0;
+
+/// When the current turn runs out. A pure calculation over times the server
+/// passes in (milliseconds), since a room keeps no clock of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TurnClock {
+    pub key: u64,
+    started: f64,
+    away_since: Option<f64>,
+    back_at: Option<f64>,
+}
+
+impl TurnClock {
+    /// The clock for turn `key` now, carrying on from `previous` if it's the same turn.
+    pub fn tick(previous: Option<TurnClock>, key: u64, connected: bool, now: f64) -> TurnClock {
+        let mut clock = previous.filter(|c| c.key == key).unwrap_or(TurnClock {
+            key,
+            started: now,
+            away_since: None,
+            back_at: None,
+        });
+        match (connected, clock.away_since) {
+            (false, None) => clock.away_since = Some(now),
+            (true, Some(_)) => {
+                clock.away_since = None;
+                clock.back_at = Some(now);
+            }
+            _ => {}
+        }
+        clock
+    }
+
+    pub fn deadline(&self) -> f64 {
+        let deadline = match self.away_since {
+            Some(since) => since + AWAY_TURN_MS,
+            None => (self.started + TURN_MS).max(self.back_at.map_or(0.0, |t| t + AWAY_TURN_MS)),
+        };
+        deadline.min(self.started + LONGEST_TURN_MS)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Occupant {
@@ -238,10 +292,33 @@ impl Room {
         self.seats.iter().filter(|o| matches!(o, Occupant::Human { connected: true, .. })).count()
     }
 
+    /// A person holds this seat, but their connection is down.
+    pub fn is_away(&self, seat: Seat) -> bool {
+        matches!(self.seats[seat], Occupant::Human { connected: false, .. })
+    }
+
+    /// Someone has been gone too long: a bot takes the seat, so a table can't
+    /// fill up with people who are never coming back.
+    pub fn release_seat(&mut self, seat: Seat) {
+        if self.is_away(seat) {
+            self.vacate(seat);
+        }
+    }
+
     pub fn seat_of_token(&self, token: &str) -> Option<Seat> {
         self.seats
             .iter()
             .position(|o| matches!(o, Occupant::Human { token: t, .. } if t == token))
+    }
+
+    /// The token of the person in `seat`. A connection belongs to a token, not
+    /// a seat number: the token moves when its player changes seats, and is
+    /// gone when they leave, so a connection can't outlive its claim to a seat.
+    pub fn token_at(&self, seat: Seat) -> Option<&str> {
+        match &self.seats[seat] {
+            Occupant::Human { token, .. } => Some(token),
+            Occupant::Bot => None,
+        }
     }
 
     /// Seats a player who sent [`ClientMsg::Hello`]. A known `token` gets its
@@ -255,6 +332,7 @@ impl Room {
         if let Some(seat) = token.and_then(|t| self.seat_of_token(t)) {
             let token = token.unwrap_or_default().to_string();
             self.seats[seat] = Occupant::Human { name, token: token.clone(), connected: true };
+            self.check_host();
             self.welcome(seat, &token);
             return Ok(seat);
         }
@@ -269,9 +347,7 @@ impl Room {
 
     fn seat_player(&mut self, seat: Seat, name: String, token: &str) {
         self.seats[seat] = Occupant::Human { name, token: token.to_string(), connected: true };
-        if self.host.is_none() {
-            self.host = Some(seat);
-        }
+        self.check_host();
         self.welcome(seat, token);
     }
 
@@ -291,10 +367,14 @@ impl Room {
             return Err(ErrorCode::Version);
         }
         let returning = token.is_some_and(|t| self.seat_of_token(t).is_some());
-        if self.public || returning || self.host.is_none() {
+        if self.public || returning {
             return self.join(version, name, token, fresh_token).map(Some);
         }
-        if self.free_seat().is_none() {
+        // Nobody is here to answer, and a private table stays private when it's empty.
+        if self.connected() == 0 {
+            return Err(ErrorCode::Declined);
+        }
+        if self.free_seat().is_none() || self.knocks.len() >= MAX_KNOCKS {
             return Err(ErrorCode::RoomFull);
         }
         self.knocks.retain(|k| k.id != id);
@@ -337,24 +417,37 @@ impl Room {
         }
     }
 
-    /// Hands the host's job to the next person at the table (or nobody).
-    fn pass_host(&mut self, from: Seat) {
-        if self.host == Some(from) {
-            self.host = JOIN_ORDER.iter().copied().find(|&s| matches!(self.seats[s], Occupant::Human { .. }));
-            if self.host.is_none() {
-                // Nobody left to answer: turn the waiting players away.
+    /// Keeps the host's job with someone who is actually here, so requests to
+    /// join always reach a person. With nobody here, the waiting players are
+    /// turned away, and the job stays with whoever may come back first.
+    fn check_host(&mut self) {
+        let here = |o: &Occupant| matches!(o, Occupant::Human { connected: true, .. });
+        if self.host.is_some_and(|h| here(&self.seats[h])) {
+            return;
+        }
+        match JOIN_ORDER.iter().copied().find(|&s| here(&self.seats[s])) {
+            Some(seat) => {
+                self.host = Some(seat);
+                if !self.knocks.is_empty() {
+                    self.send_knocks();
+                }
+            }
+            None => {
+                let seated = |s: &Seat| matches!(self.seats[*s], Occupant::Human { .. });
+                self.host = self.host.filter(seated).or_else(|| JOIN_ORDER.iter().copied().find(seated));
                 self.declined.extend(self.knocks.drain(..).map(|k| k.id));
             }
-            self.send_knocks();
         }
     }
 
-    /// The player's connection closed. Their seat is kept for them.
+    /// The player's connection closed. Their seat is kept for them, but someone
+    /// else at the table takes over answering requests to join.
     pub fn disconnected(&mut self, seat: Seat) {
         if let Occupant::Human { connected, .. } = &mut self.seats[seat]
             && *connected
         {
             *connected = false;
+            self.check_host();
             self.broadcast_seats();
         }
     }
@@ -410,12 +503,7 @@ impl Room {
                     self.send_sync(seat);
                 }
             }
-            ClientMsg::Leave => {
-                self.seats[seat] = Occupant::Bot;
-                self.pass_host(seat);
-                self.broadcast_seats();
-                self.settle();
-            }
+            ClientMsg::Leave => self.vacate(seat),
             ClientMsg::SetPublic { public } => {
                 if self.host != Some(seat) {
                     self.refuse(seat, ErrorCode::NotAllowed);
@@ -445,6 +533,14 @@ impl Room {
                 self.send_knocks();
             }
         }
+    }
+
+    /// A bot takes the seat, and its token stops working.
+    fn vacate(&mut self, seat: Seat) {
+        self.seats[seat] = Occupant::Bot;
+        self.check_host();
+        self.broadcast_seats();
+        self.settle();
     }
 
     /// The human seat the game is waiting on, and a key for this turn: pass

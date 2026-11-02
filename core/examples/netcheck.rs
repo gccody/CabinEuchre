@@ -4,7 +4,10 @@
 //! player drops and reconnects mid-game, and a bogus room code is tried.
 //! With 3+ players the last one comes by the room's handle (like a Steam
 //! friend's "Join Game") and the host lets them in; a stranger knocking the
-//! same way is turned away.
+//! same way is turned away. It also checks that a player who changes seats
+//! stays connected to the room, that a connection left open after leaving can't
+//! pick up the next player's seat, and that the host's job moves on when the
+//! host's connection drops.
 //!
 //! ```sh
 //! cd server && npx wrangler dev        # in one terminal
@@ -78,6 +81,76 @@ fn knock_and_get_declined(server: &str, handle: &str) {
         }
     }
     panic!("stranger never got an answer");
+}
+
+/// Reads until `wanted` matches, for at most `secs` seconds.
+fn wait_for(socket: &mut Socket, secs: u64, wanted: impl Fn(&ServerMsg) -> bool) -> Option<ServerMsg> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        if let Some(msg) = recv(socket).filter(|m| wanted(m)) {
+            return Some(msg);
+        }
+    }
+    None
+}
+
+/// Says hello on a new connection. Returns the socket, the room code and the handle.
+fn arrive(url: &str, name: &str) -> (Socket, String, String) {
+    let mut socket = connect(url);
+    send(&mut socket, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: name.into(), token: None });
+    match wait_for(&mut socket, 10, |m| matches!(m, ServerMsg::Welcome { .. })) {
+        Some(ServerMsg::Welcome { room, handle, .. }) => (socket, room, handle),
+        _ => panic!("{name}: no welcome"),
+    }
+}
+
+/// SIT HERE: the connection follows the player to the new seat.
+fn changing_seats_keeps_the_connection(server: &str) {
+    let (mut host, _, _) = arrive(&format!("{server}/create?target=5"), "host");
+    send(&mut host, &ClientMsg::Sit { seat: 1 });
+    assert!(wait_for(&mut host, 10, |m| matches!(m, ServerMsg::Seats(_))).is_some(), "no seats after moving");
+    send(&mut host, &ClientMsg::Start);
+    assert!(wait_for(&mut host, 10, |m| matches!(m, ServerMsg::Deal(_))).is_some(), "no deal after moving");
+    println!("changing seats keeps the connection: ok");
+}
+
+/// A connection kept open after `Leave` holds nothing: the next player in that
+/// seat keeps their token and their hand to themselves.
+fn leaving_gives_up_the_seat(server: &str) {
+    let (mut host, code, handle) = arrive(&format!("{server}/create?target=5"), "host");
+    let (mut leaver, _, _) = arrive(&format!("{server}/join/{code}"), "leaver");
+    send(&mut leaver, &ClientMsg::Leave);
+    thread::sleep(Duration::from_millis(500));
+
+    let mut next = connect(&format!("{server}/knock/{handle}"));
+    send(&mut next, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: "next".into(), token: None });
+    let asked = wait_for(&mut host, 10, |m| matches!(m, ServerMsg::Knocks { requests } if !requests.is_empty()));
+    let Some(ServerMsg::Knocks { requests }) = asked else { panic!("the host wasn't asked") };
+    send(&mut host, &ClientMsg::Answer { id: requests[0].id, accept: true });
+    assert!(wait_for(&mut next, 10, |m| matches!(m, ServerMsg::Welcome { .. })).is_some(), "not let in");
+    // Everything the seat is told now goes to them, not to the old connection.
+    assert!(wait_for(&mut leaver, 2, |m| !matches!(m, ServerMsg::Seats(_))).is_none(), "the old connection heard about it");
+    send(&mut leaver, &ClientMsg::Start);
+    match wait_for(&mut leaver, 5, |m| matches!(m, ServerMsg::Error { .. })) {
+        Some(ServerMsg::Error { code: ErrorCode::NotAllowed, .. }) => {}
+        other => panic!("the old connection could still act: {other:?}"),
+    }
+    println!("leaving gives up the seat: ok");
+}
+
+/// The host's connection drops: the next person answers requests to join.
+fn the_host_job_moves_on_a_drop(server: &str) {
+    let (mut host, code, handle) = arrive(&format!("{server}/create?target=5"), "host");
+    let (mut guest, _, _) = arrive(&format!("{server}/join/{code}"), "guest");
+    let _ = host.close(None);
+    let _ = host.flush();
+    drop(host);
+    thread::sleep(Duration::from_millis(800));
+    let mut next = connect(&format!("{server}/knock/{handle}"));
+    send(&mut next, &ClientMsg::Hello { version: PROTOCOL_VERSION, name: "next".into(), token: None });
+    let asked = wait_for(&mut guest, 10, |m| matches!(m, ServerMsg::Knocks { requests } if !requests.is_empty()));
+    assert!(asked.is_some(), "the request never reached the next person");
+    println!("the host's job moves on a drop: ok");
 }
 
 /// Plays one seat until the game ends. Returns the final score (theirs, ours).
@@ -225,6 +298,10 @@ fn main() {
             Err(_) => break,
         }
     }
+
+    changing_seats_keeps_the_connection(&server);
+    leaving_gives_up_the_seat(&server);
+    the_host_job_moves_on_a_drop(&server);
 
     // The host creates the room; the others join with its code.
     let (code_tx, code_rx) = mpsc::channel::<(String, String)>();
