@@ -1,5 +1,5 @@
 //! Player settings, persisted as a tiny `key=value` file in the user's config
-//! directory (`%APPDATA%\Euchre` on Windows, `~/.config/euchre` elsewhere, the
+//! directory (`%APPDATA%\CabinEuchre` on Windows, `~/.config/cabin-euchre` elsewhere, the
 //! app's own folder on phones).
 
 use std::path::PathBuf;
@@ -25,16 +25,16 @@ pub struct Settings {
     pub name: String,
 }
 
-/// Where the game keeps its files: `%APPDATA%\Euchre` on Windows,
-/// `~/.config/euchre` elsewhere.
+/// Where the game keeps its files: `%APPDATA%\CabinEuchre` on Windows,
+/// `~/.config/cabin-euchre` elsewhere.
 pub fn config_dir() -> Option<PathBuf> {
     // A phone's app only has its own private folder (and no APPDATA or HOME on Android).
     if crate::device::NATIVE_MOBILE {
         return Some(love2drs::filesystem::save_dir());
     }
     std::env::var_os("APPDATA")
-        .map(|p| PathBuf::from(p).join("Euchre"))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("euchre")))
+        .map(|p| PathBuf::from(p).join("CabinEuchre"))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("cabin-euchre")))
 }
 
 pub const SPEED_NAMES: [&str; 3] = ["Relaxed", "Normal", "Fast"];

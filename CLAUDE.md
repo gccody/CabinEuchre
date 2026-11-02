@@ -1,6 +1,6 @@
-# Euchre
+# Cabin Euchre
 
-A Euchre card game in Rust on the [love2drs](https://github.com/gccody/Love2DRS) framework, with
+Cabin Euchre is a Euchre card game in Rust on the [love2drs](https://github.com/gccody/Love2DRS) framework, with
 a cozy Great Lakes cabin presentation: chunky pixel art on a lamp-lit walnut table with a felt
 mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with punchy sounds
 (lively, but deliberately not over the top).
@@ -18,6 +18,9 @@ seats. Rooms run on a Cloudflare Worker with one Durable Object per table (`serv
 invite or the code sits you straight down. Steam only passes codes and room handles around, so
 Steam and phone players share tables.
 
+Only the player-facing brand is Cabin Euchre. Internal names (the `euchre-core` crate, `EUCHRE_*`
+switches, the `euchre` worker and its deployed URL) keep the old name on purpose.
+
 Use the `love2drs` skill (`.claude/skills/love2drs/`) for framework API questions. Its
 `references/api.md` is the API reference. Don't guess method names.
 
@@ -31,14 +34,18 @@ cargo clippy --all-targets     # keep it warning-free (also with --features stea
 cd server && npx wrangler dev  # the room server on ws://127.0.0.1:8787 (see server/README.md)
 cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3   # play a game against it
 LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   # render one frame to PNG and exit
-cargo love2drs android run -p euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
-cargo love2drs ios build -p euchre                  # on a Mac: builds the .app for the simulator
+cargo love2drs android run -p cabin-euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
+cargo love2drs ios build -p cabin-euchre                  # on a Mac: builds the .app for the simulator
 EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,24 cargo run   # preview the phone layouts on the desktop
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
 of frame numbers. In game, F2 toggles the lamplight post-process (useful for judging raw art; it restores the
 slider's strength when turned back on) and F11 toggles fullscreen.
+
+The README's screenshots live in `docs/screenshots/`. They're seed 15 at frames like 340 (bidding) and
+1420 (a trick), with `EUCHRE_DEFAULT_SETTINGS=1 EUCHRE_FIXED_DT=1`. Phone shots use the preview command
+above, and the tablet shot uses `EUCHRE_WINDOW=1180x820 EUCHRE_SAFE=0,24,0,20`.
 
 ### Debug switches (environment variables)
 
@@ -94,9 +101,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/palette.rs` | every color the game uses |
 | `src/juice.rs` | `Spring`, easing curves, `wobble` |
 | `src/sfx.rs` | procedural sound effects (`Sound` enum), pitch jitter, synthesized lounge music loop |
-| `src/settings.rs` | options persisted to `%APPDATA%\Euchre\settings.txt` (or `~/.config/euchre/`) |
+| `src/settings.rs` | options persisted to `%APPDATA%\CabinEuchre\settings.txt` (or `~/.config/cabin-euchre/`) |
 | `src/savegame.rs` | the save slot, `savegame.txt` in the same folder: read, write (atomically), forget a finished game |
 | `src/assets.rs` | asset path lookup (cwd, crate root, exe dir) |
+| `tools/make_icon.py` | paints `assets/icon.png` (`python tools/make_icon.py`, needs Pillow). Keep its outer edge one flat color: Android fills around the icon with the corner color |
 
 ### How the table works
 
@@ -127,7 +135,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   "SAVE & QUIT" (pause menu) and closing the window mid-game write it (`Scene::suspend`); game
   over deletes it, but only if it holds that game (`savegame::forget(id)`). `Table::resume`
   works out every card's place from the round (`settled_places`) and deals them back out. To
-  screenshot a resume, point `APPDATA` at a scratch folder holding `Euchre\savegame.txt` and use
+  screenshot a resume, point `APPDATA` at a scratch folder holding `CabinEuchre\savegame.txt` and use
   `EUCHRE_SCENE=continue` (screenshot mode exits without `Game::quit`, so it never saves).
 
 ### Online play
@@ -216,9 +224,9 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - **No quit or fullscreen on mobile:** the title has no QUIT button and Options has no Fullscreen row.
 - **Shipping builds need `EUCHRE_SERVER` set at build time.** The default is `ws://127.0.0.1:8787`, and
   a phone has no room server on localhost.
-- **Store builds:** `cargo love2drs android package -p euchre --keystore upload.jks --key-alias upload
+- **Store builds:** `cargo love2drs android package -p cabin-euchre --keystore upload.jks --key-alias upload
   --bundletool bundletool-all.jar` makes an `.aab` (password in `LOVE2DRS_KEYSTORE_PASS`), and on a Mac
-  `cargo love2drs ios package -p euchre --identity NAME --profile PATH` makes an `.ipa` and `.dSYM`.
+  `cargo love2drs ios package -p cabin-euchre --identity NAME --profile PATH` makes an `.ipa` and `.dSYM`.
   The iOS privacy manifest is generated and declares no data collection. If the App Store answers need
   to say otherwise (online play sends a name and an address), write one and set `privacy_manifest`.
 - **Sound** is left to the framework: it pauses in the background and after an interruption, and it comes back

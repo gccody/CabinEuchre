@@ -1,15 +1,15 @@
 [package]
-name = "euchre"
+name = "cabin-euchre"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Euchre on a lamp-lit cabin table, with juicy pixel-art card-game feel."
+description = "Cabin Euchre: euchre on a lamp-lit cabin table, with juicy pixel-art card-game feel."
 publish = false
 
 [package.metadata.love2drs]
-# Android and iOS builds: `cargo love2drs android run -p euchre`.
-app_id = "com.gccody.euchre"
-name = "Euchre"
+# Android and iOS builds: `cargo love2drs android run -p cabin-euchre`.
+app_id = "com.gccody.cabineuchre"
+name = "Cabin Euchre"
 orientation = "landscape"
 assets = ["assets/music/theme.ogg"]
 icon = "assets/icon.png"

@@ -1,4 +1,4 @@
-//! Euchre: entry point.
+//! Cabin Euchre: entry point.
 //!
 //! Module map:
 //! - `euchre`   the `euchre-core` crate: rules, scoring, AI, saves and the online protocol
@@ -47,7 +47,7 @@ fn main() -> love2drs::Result {
         .filter(|_| cfg!(debug_assertions))
         .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
         .unwrap_or((1280, 720));
-    let conf = Conf::new("Euchre")
+    let conf = Conf::new("Cabin Euchre")
         .size(w, h)
         .resizable(true)
         .min_size(render::VIEW_W, render::VIEW_H);

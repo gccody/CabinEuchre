@@ -24,7 +24,10 @@ use crate::sfx::Sound;
 use crate::text::Text;
 use crate::ui::{Button, Rect};
 
-const TITLE: &str = "EUCHRE";
+/// Seconds between the logo's letters popping in.
+const LETTER_GAP: f32 = 0.04;
+/// Line spacing when the logo takes two lines.
+const LOGO_ROW: f32 = 52.0;
 const CX: f32 = VIEW_W as f32 / 2.0;
 
 struct FanCard {
@@ -52,6 +55,8 @@ enum Choice {
 pub struct Title {
     cards: Vec<FanCard>,
     letters: Vec<Spring>,
+    /// The logo has finished popping in once.
+    logo_shown: bool,
     buttons: Vec<(Choice, Button)>,
     overlay: Option<Overlay>,
     age: f32,
@@ -77,10 +82,16 @@ const PLAQUE_BELOW: f32 = 4.0;
 /// On a phone they take the left of the screen, beside a column of big plaques.
 fn header(lift: f32) -> (f32, f32, f32, f32) {
     if device::mobile() {
-        (184.0, 118.0, 222.0, 262.0)
+        (184.0, 92.0, 172.0, 268.0)
     } else {
         (CX, 80.0 - lift, 150.0 - lift, 186.0 - lift)
     }
+}
+
+/// The logo, line by line: one line across the table on a desktop, two on a
+/// phone, where the menu column takes the right of the screen.
+fn logo_lines() -> &'static [&'static str] {
+    if device::mobile() { &["CABIN", "EUCHRE"] } else { &["CABIN EUCHRE"] }
 }
 
 /// The phone's menu: a column of plaques a thumb can't miss. There's no QUIT:
@@ -154,7 +165,7 @@ impl Title {
                 }
             })
             .collect();
-        let letters = (0..TITLE.len()).map(|_| Spring::new(0.0)).collect();
+        let letters = logo_lines().concat().chars().map(|_| Spring::new(0.0)).collect();
         // A single column of plaques under the logo.
         let w = 112.0;
         let buttons = if device::mobile() {
@@ -182,6 +193,7 @@ impl Title {
         Title {
             cards,
             letters,
+            logo_shown: false,
             buttons,
             overlay: None,
             age: 0.0,
@@ -240,14 +252,23 @@ impl Scene for Title {
         if let Some(o) = &mut self.overlay {
             o.update(shared, dt);
         }
-        // Letters pop in one after another.
-        for (i, l) in self.letters.iter_mut().enumerate() {
-            if self.age > 0.25 + i as f32 * 0.07 && l.target == 0.0 {
+        // Letters pop in one after another. The logo is wider than the panels,
+        // so it ducks out of the way while one is open.
+        let logo = logo_lines().concat();
+        let showing = self.overlay.is_none();
+        for (i, (l, ch)) in self.letters.iter_mut().zip(logo.chars()).enumerate() {
+            if !showing {
+                l.target = 0.0;
+            } else if self.age > 0.25 + i as f32 * LETTER_GAP && l.target == 0.0 {
                 l.target = 1.0;
-                shared.sfx.play_pitched(Sound::Tick, 1.0 + i as f32 * 0.08);
+                if ch != ' ' && !self.logo_shown {
+                    shared.sfx.play_pitched(Sound::Tick, 1.0 + i as f32 * 0.04);
+                }
             }
             l.update(dt);
         }
+        // Only the first time gets the rising ticks, not every closed panel.
+        self.logo_shown |= showing && self.letters.iter().all(|l| l.target == 1.0);
         let mouse = if self.overlay.is_some() { NO_POINTER } else { shared.mouse };
         let hovered = self.card_under(mouse);
         for (i, c) in self.cards.iter_mut().enumerate() {
@@ -291,37 +312,41 @@ impl Scene for Title {
         // each bobbing and tilting on its own phase.
         let scale = 4.5;
         let depth = 4;
-        let widths: Vec<f32> = TITLE.chars().map(|ch| font.width(&ch.to_string()) + 2.0).collect();
-        let total = (widths.iter().sum::<f32>() - 2.0) * scale;
         let (head_x, _, logo_y, tag_y) = header(self.lift);
-        let mut x = head_x - total / 2.0;
-        let cy = logo_y;
-        for (i, ch) in TITLE.chars().enumerate() {
-            let s = ch.to_string();
-            let w = widths[i] * scale;
-            let pop = self.letters[i].value;
-            let lx = x + (w - 2.0 * scale) / 2.0;
-            let ly = cy + juice::wobble(t, i as f32, 2.2, 3.0);
-            let rot = juice::wobble(t, i as f32 + 7.0, 1.7, 0.05);
-            if pop > 0.01 {
-                let letter = |x: f32, y: f32, color: Color| {
-                    Text::new(&s, x, y).scale(scale * pop).rotation(rot).center().color(color).no_shadow()
-                };
-                // Outline around both the face and the back of the extrusion.
-                for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0)] {
-                    for d in [0, depth] {
-                        let ox = lx + dx * 2.0 + d as f32 * 0.5;
-                        let oy = ly + dy * 2.0 + d as f32;
-                        letter(ox, oy, palette::INK).draw(g, font);
+        let mut i = 0;
+        for (row, line) in logo_lines().iter().enumerate() {
+            let widths: Vec<f32> = line.chars().map(|ch| font.width(&ch.to_string()) + 2.0).collect();
+            let total = (widths.iter().sum::<f32>() - 2.0) * scale;
+            let mut x = head_x - total / 2.0;
+            let cy = logo_y + row as f32 * LOGO_ROW;
+            for (ch, width) in line.chars().zip(&widths) {
+                let s = ch.to_string();
+                let w = width * scale;
+                let pop = self.letters[i].value;
+                let lx = x + (w - 2.0 * scale) / 2.0;
+                let ly = cy + juice::wobble(t, i as f32, 2.2, 3.0);
+                let rot = juice::wobble(t, i as f32 + 7.0, 1.7, 0.05);
+                if pop > 0.01 && ch != ' ' {
+                    let letter = |x: f32, y: f32, color: Color| {
+                        Text::new(&s, x, y).scale(scale * pop).rotation(rot).center().color(color).no_shadow()
+                    };
+                    // Outline around both the face and the back of the extrusion.
+                    for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                        for d in [0, depth] {
+                            let ox = lx + dx * 2.0 + d as f32 * 0.5;
+                            let oy = ly + dy * 2.0 + d as f32;
+                            letter(ox, oy, palette::INK).draw(g, font);
+                        }
                     }
+                    for d in (1..=depth).rev() {
+                        let c = if d == 1 { palette::BRASS } else { palette::BRASS_DARK };
+                        letter(lx + d as f32 * 0.5, ly + d as f32, c).draw(g, font);
+                    }
+                    letter(lx, ly, palette::CREAM).draw(g, font);
                 }
-                for d in (1..=depth).rev() {
-                    let c = if d == 1 { palette::BRASS } else { palette::BRASS_DARK };
-                    letter(lx + d as f32 * 0.5, ly + d as f32, c).draw(g, font);
-                }
-                letter(lx, ly, palette::CREAM).draw(g, font);
+                x += w;
+                i += 1;
             }
-            x += w;
         }
         Text::new("♣  A TRICK-TAKING CARD GAME  ♥", head_x, tag_y)
             .color(palette::BRASS_LIGHT)

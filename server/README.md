@@ -1,4 +1,4 @@
-# Euchre room server
+# Cabin Euchre room server
 
 A Cloudflare Worker (Rust, compiled to wasm) with one **Durable Object per table**. Every online
 game, from Steam, phone or anything else, plays at one of these rooms, so everyone can sit at the
