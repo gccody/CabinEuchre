@@ -109,6 +109,44 @@ impl Match {
         self.scored = false;
     }
 
+    /// The current hand as it was dealt, before anyone acted.
+    pub fn dealt_round(&self) -> Round {
+        Round::deal(self.round.dealer, &mut self.hand_rng.clone(), self.stick_the_dealer)
+    }
+
+    /// Every action taken in the current hand so far, with who took it.
+    pub fn history(&self) -> Vec<(Seat, Action)> {
+        let mut round = self.dealt_round();
+        let mut out = Vec::new();
+        for &step in &self.log {
+            match step {
+                Step::Act(action) => {
+                    let seat = round.to_act().expect("logged steps replay");
+                    round.apply(seat, action).expect("logged steps replay");
+                    out.push((seat, action));
+                }
+                Step::Advance => round.advance(),
+            }
+        }
+        out
+    }
+
+    /// The score before the current hand's points were added.
+    pub fn scores_before_hand(&self) -> [u32; 2] {
+        let mut scores = self.scores;
+        if self.scored
+            && let Some(result) = self.round.result()
+        {
+            scores[result.scoring_team] -= result.points;
+        }
+        scores
+    }
+
+    /// Whether the current hand's points have been added to the score.
+    pub fn hand_scored(&self) -> bool {
+        self.scored
+    }
+
     /// Whether nothing has happened yet in the current hand.
     pub fn hand_untouched(&self) -> bool {
         self.log.is_empty()

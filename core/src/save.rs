@@ -40,12 +40,7 @@ impl Match {
     /// the hand being "scored"), so a game saved while the result is showing
     /// resumes with that result being counted up again rather than twice.
     pub fn to_save(&self) -> String {
-        let mut scores = self.scores;
-        if self.scored
-            && let Some(result) = self.round.result()
-        {
-            scores[result.scoring_team] -= result.points;
-        }
+        let scores = self.scores_before_hand();
         let steps: Vec<String> = self.log.iter().map(|&s| step_token(s)).collect();
         format!(
             "version={VERSION}\nid={}\ntarget={}\nstick_the_dealer={}\nscores={} {}\nhand={}\ndealer={}\nrng={}\nsteps={}\n",
