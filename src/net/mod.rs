@@ -44,6 +44,11 @@ impl Link {
         matches!(self, Link::Online(_))
     }
 
+    /// Going back to a seat this player already held at this table.
+    pub fn rejoining(&self) -> bool {
+        matches!(self, Link::Online(c) if c.rejoining())
+    }
+
     /// The real match, for an offline game (what gets saved).
     pub fn local_match(&self) -> Option<&Match> {
         match self {

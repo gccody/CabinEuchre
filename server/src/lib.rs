@@ -26,9 +26,9 @@
 use std::cell::RefCell;
 
 use euchre_core::protocol::{
-    ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg, clean_code, clean_handle, make_code,
+    CLOSE_REPLACED, ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg, clean_code, clean_handle, make_code,
 };
-use euchre_core::room::{AWAY_SEAT_MS, Room, RoomSnapshot, TurnClock};
+use euchre_core::room::{AWAY_SEAT_MS, Occupant, Room, RoomSnapshot, TurnClock};
 use serde::{Deserialize, Serialize};
 use worker::*;
 
@@ -202,6 +202,7 @@ impl EuchreRoom {
                 return Ok(());
             }
         };
+        self.notice_lost_sockets(&mut room);
         f(&mut room, &mut saved);
         // Requests the host answered: seat the waiting sockets before their
         // welcome goes out, or turn them away.
@@ -224,6 +225,25 @@ impl EuchreRoom {
         self.state.storage().put("room", serde_json::to_string(&saved)?).await?;
         *self.saved.borrow_mut() = Some(saved);
         Ok(())
+    }
+
+    /// A restart (a deploy, say) cuts every socket without calling `websocket_close`,
+    /// while the stored room still has everyone connected. So each time the room
+    /// wakes it checks: a player with no socket has dropped, and a request to join
+    /// with no socket has given up. Sockets outlive hibernation, so a room that was
+    /// only asleep finds nothing to do. A socket seated in this same call isn't
+    /// missed, since this runs first and they get their attachment as they sit down.
+    fn notice_lost_sockets(&self, room: &mut Room) {
+        for seat in 0..4 {
+            let lost = matches!(&room.seats()[seat], Occupant::Human { token, connected: true, .. } if self.holding(token).is_empty());
+            if lost {
+                room.disconnected(seat);
+            }
+        }
+        let gone: Vec<u32> = room.knocks().iter().map(|k| k.id).filter(|&id| self.knocking(id).is_empty()).collect();
+        for id in gone {
+            room.cancel_knock(id);
+        }
     }
 
     fn holding(&self, token: &str) -> Vec<WebSocket> {
@@ -371,7 +391,7 @@ impl DurableObject for EuchreRoom {
                             let token = room.token_at(s).unwrap_or_default();
                             for old in self.holding(token) {
                                 let _ = old.serialize_attachment(Attachment::default());
-                                let _ = old.close(Some(4001), Some("Replaced by a newer connection"));
+                                let _ = old.close(Some(CLOSE_REPLACED), Some("Replaced by a newer connection"));
                             }
                             let _ = ws.serialize_attachment(Attachment::seated(token));
                         }

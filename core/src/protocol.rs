@@ -29,6 +29,11 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Longest player name, in characters.
 pub const MAX_NAME_LEN: usize = 10;
 
+/// The WebSocket close code for a connection whose seat was taken up by a newer
+/// connection with the same token. It must not reconnect, or the two would keep
+/// taking the seat from each other.
+pub const CLOSE_REPLACED: u16 = 4001;
+
 /// Letters a room code is made from: no I or O, which read like 1 and 0.
 pub const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
 pub const CODE_LEN: usize = 6;

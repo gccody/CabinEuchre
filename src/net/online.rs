@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use crate::euchre::protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
+use crate::euchre::protocol::{CLOSE_REPLACED, ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg};
 use crate::net::seat_memory;
 
 /// Where `wrangler dev` serves the room server (see `server/README.md`).
@@ -63,8 +63,15 @@ pub enum Join {
     Knock(String),
 }
 
+/// How long a [`ClientMsg::Leave`] made with the connection down keeps trying to get
+/// out. Without it the seat stays a ghost until the room gives up on it.
+const LEAVE_TRIES_FOR: Duration = Duration::from_secs(30);
+
 enum Command {
     Send(String),
+    /// Unlike a move, this can't wait for a resync: the player is gone, and has
+    /// forgotten the token, so only this tells the room to free the seat.
+    Leave,
     Close,
 }
 
@@ -81,6 +88,7 @@ pub struct Connection {
     handle: Option<String>,
     inbox: VecDeque<ServerMsg>,
     thread: JoinHandle<()>,
+    rejoining: bool,
 }
 
 impl Connection {
@@ -97,11 +105,17 @@ impl Connection {
             Join::Code(code) => seat_memory::token_for(code),
             _ => None,
         };
+        let rejoining = token.is_some();
         let thread = std::thread::Builder::new()
             .name("euchre-net".into())
             .spawn(move || run(server, join, token, query, name, command_rx, event_tx))
             .expect("spawn the network thread");
-        Connection { commands, events, status: Status::Connecting, room: None, handle: None, inbox: VecDeque::new(), thread }
+        Connection { commands, events, status: Status::Connecting, room: None, handle: None, inbox: VecDeque::new(), thread, rejoining }
+    }
+
+    /// Connecting with a token from an earlier visit, so a seat here is already ours.
+    pub fn rejoining(&self) -> bool {
+        self.rejoining
     }
 
     /// Closes the connection and waits a moment for the thread to finish, so
@@ -115,7 +129,9 @@ impl Connection {
     }
 
     pub fn send(&mut self, msg: ClientMsg) {
-        if let Ok(text) = serde_json::to_string(&msg) {
+        if msg == ClientMsg::Leave {
+            let _ = self.commands.send(Command::Leave);
+        } else if let Ok(text) = serde_json::to_string(&msg) {
             let _ = self.commands.send(Command::Send(text));
         }
     }
@@ -191,6 +207,8 @@ fn run(
 ) {
     let mut failures = 0u32;
     let mut was_connected = false;
+    // The player left while the connection was down: when to stop trying to say so.
+    let mut leaving_until = None;
     loop {
         let url = match &join {
             Join::Create => format!("{server}/create{query}"),
@@ -202,10 +220,17 @@ fn run(
                 let hello = ClientMsg::Hello { version: PROTOCOL_VERSION, name: name.clone(), token: token.clone() };
                 let hello = serde_json::to_string(&hello).expect("hello serializes");
                 if socket.send(Message::text(hello)).is_ok() {
+                    if leaving_until.is_some() {
+                        // Back only to say goodbye.
+                        let _ = socket.send(Message::text(leave_text()));
+                        let _ = socket.close(None);
+                        let _ = socket.flush();
+                        return;
+                    }
                     let _ = events.send(Event::Status(Status::Connected));
                     was_connected = true;
                     failures = 0;
-                    match serve(&mut socket, &commands, &events, &mut join, &mut token) {
+                    match serve(&mut socket, &commands, &events, &mut join, &mut token, &mut leaving_until) {
                         Ended::Closed => {
                             let _ = socket.close(None);
                             let _ = socket.flush();
@@ -235,12 +260,26 @@ fn run(
         let until = Instant::now() + wait;
         while Instant::now() < until {
             match commands.recv_timeout(Duration::from_millis(100)) {
-                Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Ok(Command::Leave) => {
+                    // Try again right away.
+                    leaving_until = Some(Instant::now() + LEAVE_TRIES_FOR);
+                    break;
+                }
+                Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) if leaving_until.is_none() => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(Duration::from_millis(100)),
                 // Moves made while offline are dropped: the room resyncs us on reconnect.
-                Ok(Command::Send(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(Command::Close | Command::Send(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         }
+        // Without a token there's no seat to give back.
+        if leaving_until.is_some_and(|by| token.is_none() || Instant::now() > by) {
+            return;
+        }
     }
+}
+
+fn leave_text() -> String {
+    serde_json::to_string(&ClientMsg::Leave).expect("leave serializes")
 }
 
 fn connect(url: &str) -> Result<Socket, String> {
@@ -283,6 +322,7 @@ fn serve(
     events: &Sender<Event>,
     join: &mut Join,
     token: &mut Option<String>,
+    leaving_until: &mut Option<Instant>,
 ) -> Ended {
     let mut last_ping = Instant::now();
     let mut last_heard = Instant::now();
@@ -292,6 +332,13 @@ fn serve(
             match commands.try_recv() {
                 Ok(Command::Send(text)) => {
                     if socket.send(Message::text(text)).is_err() {
+                        return Ended::Dropped;
+                    }
+                }
+                Ok(Command::Leave) => {
+                    // If this doesn't get out, `run` keeps trying.
+                    *leaving_until = Some(Instant::now() + LEAVE_TRIES_FOR);
+                    if socket.send(Message::text(leave_text())).is_err() {
                         return Ended::Dropped;
                     }
                 }
@@ -340,7 +387,12 @@ fn serve(
                     return Ended::Closed;
                 }
             }
-            Ok(Message::Close(_)) => return Ended::Dropped,
+            Ok(Message::Close(frame)) => {
+                if frame.is_some_and(|f| u16::from(f.code) == CLOSE_REPLACED) {
+                    return Ended::Refused("Another window took this seat.".into());
+                }
+                return Ended::Dropped;
+            }
             Ok(_) => last_heard = Instant::now(),
             Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(_) => return Ended::Dropped,
