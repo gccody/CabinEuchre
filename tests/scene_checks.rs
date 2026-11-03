@@ -80,8 +80,9 @@ fn port() -> String {
     std::env::var("EUCHRE_PROOF_PORT").unwrap_or_else(|_| "8787".into())
 }
 
+/// `EUCHRE_PROOF_SERVER=wss://...` runs the checks that only need a server against that one.
 fn real_server() -> String {
-    format!("ws://127.0.0.1:{}", port())
+    std::env::var("EUCHRE_PROOF_SERVER").unwrap_or_else(|_| format!("ws://127.0.0.1:{}", port()))
 }
 
 // ----------------------------------------------------------------------
@@ -179,7 +180,7 @@ fn use_server(url: &str) {
 
 fn real_server_or_skip() {
     let address = format!("127.0.0.1:{}", port());
-    if TcpStream::connect_timeout(&address.parse().unwrap(), Duration::from_millis(500)).is_err() {
+    if std::env::var("EUCHRE_PROOF_SERVER").is_err() && TcpStream::connect_timeout(&address.parse().unwrap(), Duration::from_millis(500)).is_err() {
         skip("no room server here (cd server && npx wrangler dev)");
     }
     use_server(&real_server());
