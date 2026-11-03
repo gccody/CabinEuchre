@@ -42,7 +42,7 @@ pub enum ClientMsg {
     Hello { version: u32, name: String, token: Option<String> },
     /// Move to another seat (relative), while no game is being played.
     Sit { seat: Seat },
-    /// Deal a new game, from the lobby or after a game ends.
+    /// Host only: deal a new game, from the lobby or after a game ends.
     Start,
     /// Your bid, discard or card.
     Act { action: Action },

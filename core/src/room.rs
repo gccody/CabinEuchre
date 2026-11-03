@@ -14,6 +14,11 @@
 //! Seats in this file are absolute (0-3 around the table). Messages are
 //! turned into each player's point of view (they are seat 0) as they go out.
 //!
+//! Sitting down mid-game: you're dealt in at the next hand, and a bot finishes
+//! this one (see `Room::waiting`). If the seat's cards came with it, leaving and
+//! coming back would show you a second hand. Coming back with your token is
+//! different: that's your own seat and your own cards.
+//!
 //! Getting in (see `protocol.rs`): [`Room::join`] seats anyone who came with
 //! the code. [`Room::knock`] is for players who came by the handle (a Steam
 //! friend's "Join Game"): at a public table they sit straight down, at a
@@ -136,6 +141,9 @@ pub struct Room {
     /// then whoever is next when they leave.
     host: Option<Seat>,
     knocks: Vec<Knock>,
+    /// Seats whose player sat down during a game and hasn't been dealt in: a bot
+    /// plays the seat, and they hear nothing about its cards, until the next deal.
+    waiting: [bool; 4],
     outbox: Vec<Outgoing>,
     admitted: Vec<(u32, Seat)>,
     declined: Vec<u32>,
@@ -161,6 +169,8 @@ pub struct RoomSnapshot {
     pub host: Option<Seat>,
     #[serde(default)]
     pub knocks: Vec<Knock>,
+    #[serde(default)]
+    pub waiting: [bool; 4],
 }
 
 fn rel(to: Seat, seat: Seat) -> Seat {
@@ -183,6 +193,7 @@ impl Room {
             public: false,
             host: None,
             knocks: Vec::new(),
+            waiting: [false; 4],
             outbox: Vec::new(),
             admitted: Vec::new(),
             declined: Vec::new(),
@@ -202,6 +213,7 @@ impl Room {
             public: self.public,
             host: self.host,
             knocks: self.knocks.clone(),
+            waiting: self.waiting,
         }
     }
 
@@ -230,6 +242,7 @@ impl Room {
             public: s.public,
             host: s.host,
             knocks: s.knocks,
+            waiting: s.waiting,
             outbox: Vec::new(),
             admitted: Vec::new(),
             declined: Vec::new(),
@@ -347,6 +360,7 @@ impl Room {
 
     fn seat_player(&mut self, seat: Seat, name: String, token: &str) {
         self.seats[seat] = Occupant::Human { name, token: token.to_string(), connected: true };
+        self.waiting[seat] = self.game.is_some();
         self.check_host();
         self.welcome(seat, token);
     }
@@ -461,24 +475,34 @@ impl Room {
         match msg {
             ClientMsg::Hello { .. } => self.refuse(seat, ErrorCode::NotAllowed),
             ClientMsg::Sit { seat: to } => {
+                if to > 3 {
+                    self.refuse(seat, ErrorCode::NotAllowed);
+                    return;
+                }
                 let to = (seat + to) % 4;
                 if self.playing() || self.seats[to] != Occupant::Bot {
                     self.refuse(seat, ErrorCode::NotAllowed);
                     return;
                 }
                 self.seats.swap(seat, to);
+                self.waiting.swap(seat, to);
                 if self.host == Some(seat) {
                     self.host = Some(to);
                 }
                 self.broadcast_seats();
             }
             ClientMsg::Start => {
-                if self.playing() {
+                if self.host != Some(seat) {
                     self.refuse(seat, ErrorCode::NotAllowed);
+                    return;
+                }
+                // Already dealt: a second press got what it asked for.
+                if self.playing() {
                     return;
                 }
                 self.game = Some(Match::new(self.target, self.stick_the_dealer, seed));
                 self.game_no += 1;
+                self.waiting = [false; 4];
                 self.broadcast_seats();
                 self.broadcast_deal();
                 self.settle();
@@ -538,6 +562,7 @@ impl Room {
     /// A bot takes the seat, and its token stops working.
     fn vacate(&mut self, seat: Seat) {
         self.seats[seat] = Occupant::Bot;
+        self.waiting[seat] = false;
         self.check_host();
         self.broadcast_seats();
         self.settle();
@@ -548,6 +573,9 @@ impl Room {
     pub fn waiting_on(&self) -> Option<(Seat, bool, u64)> {
         let m = self.game.as_ref().filter(|m| m.winner().is_none())?;
         let seat = m.round.to_act()?;
+        if self.waiting[seat] {
+            return None;
+        }
         match &self.seats[seat] {
             Occupant::Human { connected, .. } => Some((seat, *connected, self.moves)),
             Occupant::Bot => None,
@@ -580,6 +608,7 @@ impl Room {
         }
         self.game = Some(m);
         self.game_no += 1;
+        self.waiting = [false; 4];
         for seat in 0..4 {
             if matches!(self.seats[seat], Occupant::Human { .. }) {
                 self.send_sync(seat);
@@ -606,15 +635,17 @@ impl Room {
                         return;
                     }
                     m.next_hand();
+                    self.waiting = [false; 4];
                     self.broadcast_deal();
                 }
                 Phase::Misdeal => {
                     m.next_hand();
+                    self.waiting = [false; 4];
                     self.broadcast_deal();
                 }
                 _ => {
                     let Some(seat) = m.round.to_act() else { return };
-                    if self.seats[seat] != Occupant::Bot {
+                    if self.seats[seat] != Occupant::Bot && !self.waiting[seat] {
                         return;
                     }
                     let action = ai::choose(&m.round, seat);
@@ -698,6 +729,9 @@ impl Room {
     }
 
     fn send_sync(&mut self, to: Seat) {
+        if self.waiting[to] {
+            return;
+        }
         let (Some(hand), Some(m)) = (self.hand_for(to), self.game.as_ref()) else { return };
         let moves = m
             .history()
@@ -718,7 +752,7 @@ impl Room {
     /// Tells everyone but `except` (who made the move themselves) about it.
     fn broadcast_move(&mut self, seat: Seat, action: crate::round::Action, except: Option<Seat>) {
         for to in self.people() {
-            if Some(to) == except {
+            if Some(to) == except || self.waiting[to] {
                 continue;
             }
             let m = Move { seat: rel(to, seat), action: Shown::of(action, seat == to) };

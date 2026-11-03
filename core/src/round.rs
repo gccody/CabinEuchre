@@ -367,7 +367,9 @@ impl Round {
     /// Cards whose location `seat` cannot know: the other players' hands and
     /// the unknown part of the kitty. Used by the AI for card counting.
     pub fn unseen_by(&self, seat: Seat) -> Vec<Card> {
-        let turned_down = self.kitty.contains(&self.up_card);
+        // Turned down, or left out because the dealer sits out: everyone saw it go.
+        // A card the dealer picked up and buried is another matter: only they know.
+        let turned_down = self.discard.is_none() && self.kitty.contains(&self.up_card);
         Card::deck()
             .into_iter()
             .filter(|c| {

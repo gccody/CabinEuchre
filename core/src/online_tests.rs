@@ -153,8 +153,8 @@ fn simulate(seed: u64, humans: usize, chaos: bool) -> u32 {
                 if games == 2 {
                     return games;
                 }
-                let starter = players.iter().find(|p| p.online).map(|p| p.seat).unwrap_or(players[0].seat);
-                room.handle(starter, ClientMsg::Start, seed + 99);
+                let host = room.host().expect("someone holds the host's job");
+                room.handle(host, ClientMsg::Start, seed + 99);
                 continue;
             }
         }

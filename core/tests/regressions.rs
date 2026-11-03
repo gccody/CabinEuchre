@@ -1,11 +1,6 @@
-//! Bug proofs for the rules core, and the stress tests that found nothing wrong.
-//! Not part of a plain `cargo test`, since every proof FAILS while its bug is there:
-//!
-//! ```sh
-//! cargo test -p euchre-core --test bug_proofs
-//! ```
-//!
-//! Each `bug_*` test asserts the CORRECT behaviour. The `stress_*` tests pass today.
+//! Tests from the pre-release review: each `bug_*` test failed before its fix, and
+//! the `stress_*` tests throw random legal histories and damaged saves at the room,
+//! the mirror and the save format, checking their invariants after every step.
 use euchre_core::Card;
 use euchre_core::card::{Rank, Suit};
 use euchre_core::Match;
@@ -226,11 +221,10 @@ fn stress_save_fuzz_never_panics() {
 }
 
 // ----------------------------------------------------------------------
-// Bug proofs
+// Regressions
 // ----------------------------------------------------------------------
 
-/// `ClientMsg::Sit` carries any number the sender likes. In a debug build `(seat + to)` overflows
-/// and panics. The room should refuse a seat that doesn't exist.
+/// `ClientMsg::Sit` carries any number the sender likes. `(seat + to)` used to overflow.
 #[test]
 fn bug_sit_refuses_a_seat_that_doesnt_exist() {
     let mut room = Room::new("SEATS", "h", 10, true);
@@ -240,9 +234,10 @@ fn bug_sit_refuses_a_seat_that_doesnt_exist() {
     room.take_outbox();
     room.handle(bo, ClientMsg::Sit { seat: usize::MAX }, 0);
     assert_eq!(room.seat_of_token("b"), Some(bo), "there's no seat {}", usize::MAX);
+    assert!(room.take_outbox().iter().any(|o| o.to == bo && matches!(o.msg, ServerMsg::Error { .. })));
 }
 
-/// The same message without the overflow: seat 5 doesn't exist, and it still moves the player.
+/// The same message without the overflow: seat 5 doesn't exist.
 #[test]
 fn bug_sit_refuses_seat_five() {
     let mut room = Room::new("SEATS", "h", 10, true);
@@ -250,12 +245,12 @@ fn bug_sit_refuses_seat_five() {
     room.take_outbox();
     room.handle(0, ClientMsg::Sit { seat: 5 }, 0);
     assert_eq!(room.seat_of_token("a"), Some(0), "relative seats are 0-3, but seat 5 moved Ann");
+    // The real seats still work.
+    room.handle(0, ClientMsg::Sit { seat: 1 }, 0);
+    assert_eq!(room.seat_of_token("a"), Some(1));
 }
 
-/// ai.rs: "They only look at what their seat could know". When the dealer buries the card they just
-/// picked up, nobody else can know it. `unseen_by` works it out from the real kitty, so the bots know.
-#[test]
-fn bug_bots_dont_see_the_dealers_discard() {
+fn ordered_up_hand() -> (Round, Card) {
     use Rank::*;
     use Suit::*;
     let c = |r, s| Card::new(r, s);
@@ -266,62 +261,120 @@ fn bug_bots_dont_see_the_dealers_discard() {
         vec![c(Nine, Diamonds), c(Ten, Diamonds), c(Queen, Diamonds), c(King, Diamonds), c(Ace, Diamonds)],
         vec![c(Jack, Hearts), c(Jack, Diamonds), c(Ace, Hearts), c(King, Hearts), c(Queen, Hearts)],
     ];
-    let mut r = Round::with_hands(3, hands, up, vec![c(Ten, Hearts), c(Jack, Spades), c(Nine, Clubs)], true);
+    (Round::with_hands(3, hands, up, vec![c(Ten, Hearts), c(Jack, Spades), c(Nine, Clubs)], true), up)
+}
+
+/// ai.rs: "They only look at what their seat could know". When the dealer buries the card they
+/// just picked up, only the dealer knows.
+#[test]
+fn bug_bots_dont_see_the_dealers_discard() {
+    let (mut r, up) = ordered_up_hand();
     r.apply(0, Action::OrderUp { alone: false }).unwrap();
     assert!(r.unseen_by(1).contains(&up), "before the discard, seat 1 can't rule out the dealer's 9H");
     r.apply(3, Action::Discard { card: up }).unwrap();
     assert!(r.unseen_by(1).contains(&up), "seat 1 knows the face-down discard was the 9H");
+    assert!(!r.unseen_by(3).contains(&up), "the dealer does know");
 }
 
-/// The discard stays hidden from people: that's the rule in protocol.rs. But leaving and sitting back
-/// down hands you another seat's whole hand, in the same hand of cards, so any player can peek at their
-/// partner's cards (or a bot's) and go on playing.
+/// A card everyone watched go into the kitty is still known to be out of play.
+#[test]
+fn a_turned_down_card_is_known_to_be_gone() {
+    let (mut r, up) = ordered_up_hand();
+    for seat in 0..4 {
+        r.apply(seat, Action::Pass).unwrap();
+    }
+    assert_eq!(r.phase, Phase::NameTrump);
+    assert!(!r.unseen_by(1).contains(&up));
+    // The dealer's partner goes alone: the dealer never picks it up, in plain sight.
+    let (mut r, up) = ordered_up_hand();
+    r.apply(0, Action::Pass).unwrap();
+    r.apply(1, Action::OrderUp { alone: true }).unwrap();
+    assert!(!r.unseen_by(0).contains(&up));
+}
+
+/// Leaving and sitting back down used to hand you another seat's whole hand, in the same hand of
+/// cards, so anyone could look at a partner's or a bot's cards and go on playing.
 #[test]
 fn bug_leaving_and_rejoining_doesnt_show_another_hand() {
     let mut room = Room::new("PEEK", "h", 10, true);
     let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
     let bo = room.join(PROTOCOL_VERSION, "bo", None, "b").unwrap();
     room.handle(ann, ClientMsg::Start, 7);
-    let mut seen: Vec<Card> = vec![];
-    for o in room.take_outbox() {
-        if o.to == ann
-            && let ServerMsg::Deal(h) = o.msg
-        {
-            seen = h.cards;
-        }
-    }
-    assert_eq!(seen.len(), 5);
     let hand = room.game().unwrap().hand_number;
-    // Bo stays, and whoever is due to act: the room must still be on this hand when Ann is back.
     room.handle(ann, ClientMsg::Leave, 0);
     room.take_outbox();
-    // Seat 0 is free again, so she'd get her own cards back. Bo's old seat isn't, so take the next one.
+    // Ann's old seat goes to someone else, so she'd come back to a new one.
     room.join(PROTOCOL_VERSION, "cy", None, "c").unwrap();
     room.take_outbox();
     let back = room.join(PROTOCOL_VERSION, "ann", None, "a2").unwrap();
     assert_eq!(room.seat_of_token("b"), Some(bo));
-    let mut checked = false;
-    for o in room.take_outbox() {
-        if o.to == back
-            && let ServerMsg::Sync { hand: h, .. } = o.msg
-            && room.game().unwrap().hand_number == hand
-        {
-            checked = true;
-            let new: Vec<_> = h.cards.iter().filter(|c| !seen.contains(c)).collect();
-            assert!(new.is_empty(), "same hand, new seat: Ann now also knows {new:?}");
-        }
-    }
-    assert!(checked, "(setup) the hand moved on while Ann was away");
+    assert_eq!(room.game().unwrap().hand_number, hand, "(setup) the hand moved on");
+    room.handle(back, ClientMsg::Resync, 0);
+    let out = room.take_outbox();
+    assert!(out.iter().any(|o| o.to == back && matches!(o.msg, ServerMsg::Welcome { .. })), "she does get a seat");
+    assert!(
+        !out.iter().any(|o| o.to == back && matches!(o.msg, ServerMsg::Sync { .. } | ServerMsg::Deal(_))),
+        "same hand, new seat: Ann was shown that seat's cards"
+    );
 }
 
-/// Two people press PLAY AGAIN at about the same time. Both asked for the same thing, and the game
-/// starts. The second shouldn't be told "You can't do that right now." over the new deal.
+/// Someone who sits down mid-hand is dealt in at the next hand, and plays from then on.
 #[test]
-fn bug_two_people_pressing_play_again_isnt_an_error() {
-    let mut room = Room::new("AGAIN", "h", 1, true);
+fn sitting_down_mid_hand_waits_for_the_next_deal() {
+    let mut room = Room::new("LATE", "h", 10, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    room.handle(ann, ClientMsg::Start, 11);
+    room.take_outbox();
+    let cy = room.join(PROTOCOL_VERSION, "cy", None, "c").unwrap();
+    assert!(!room.take_outbox().iter().any(|o| o.to == cy && matches!(o.msg, ServerMsg::Sync { .. })));
+    // A late player's seat survives a save and a reload, still waiting.
+    let mut room = Room::restore(room.snapshot()).unwrap();
+    assert_eq!(room.snapshot().waiting[cy], true);
+    // Nothing waits on them this hand, and they don't hear about its moves.
+    for _ in 0..200 {
+        let before = room.game().unwrap().hand_number;
+        let out = room.take_outbox();
+        if before > 1 || out.iter().any(|o| o.to == cy && matches!(o.msg, ServerMsg::Deal(_))) {
+            assert!(out.iter().any(|o| o.to == cy && matches!(o.msg, ServerMsg::Deal(_))), "dealt in at the next hand");
+            assert!(!room.snapshot().waiting[cy]);
+            let seats = room.seats_for(cy);
+            assert_eq!(seats.seats[0].kind, SeatKind::Human);
+            return;
+        }
+        assert!(!out.iter().any(|o| o.to == cy && matches!(o.msg, ServerMsg::Acted(_))), "they heard a move from a hand they aren't in");
+        let (seat, _, key) = room.waiting_on().expect("the room is waiting on Ann");
+        assert_eq!(seat, ann, "the room waited on someone who hasn't been dealt in");
+        room.force_move(key);
+    }
+    panic!("the hand never ended");
+}
+
+/// Coming back with your own token is your own seat: you get your hand back at once.
+#[test]
+fn reconnecting_gets_your_own_hand_back_straight_away() {
+    let mut room = Room::new("BACK", "h", 10, true);
     let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
     let bo = room.join(PROTOCOL_VERSION, "bo", None, "b").unwrap();
-    room.handle(ann, ClientMsg::Start, 3);
+    room.handle(ann, ClientMsg::Start, 11);
+    room.disconnected(bo);
+    room.take_outbox();
+    room.join(PROTOCOL_VERSION, "bo", Some("b"), "unused").unwrap();
+    assert!(room.take_outbox().iter().any(|o| o.to == bo && matches!(o.msg, ServerMsg::Sync { .. })));
+}
+
+/// Only the host deals, both from the lobby and after a game ends.
+#[test]
+fn only_the_host_deals() {
+    let mut room = Room::new("DEAL", "h", 1, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    let bo = room.join(PROTOCOL_VERSION, "bo", None, "b").unwrap();
+    assert_eq!(room.host(), Some(ann));
+    room.take_outbox();
+    room.handle(bo, ClientMsg::Start, 1);
+    assert!(room.game().is_none(), "a guest dealt");
+    assert!(room.take_outbox().iter().any(|o| o.to == bo && matches!(o.msg, ServerMsg::Error { .. })));
+    room.handle(ann, ClientMsg::Start, 1);
+    assert!(room.game().is_some());
     let mut guard = 0;
     while let Some((_, _, key)) = room.waiting_on() {
         room.force_move(key);
@@ -329,9 +382,26 @@ fn bug_two_people_pressing_play_again_isnt_an_error() {
         assert!(guard < 500);
     }
     assert!(room.game().unwrap().winner().is_some());
-    room.take_outbox();
+    let game = room.game_no();
+    room.handle(bo, ClientMsg::Start, 2);
+    assert_eq!(room.game_no(), game, "a guest started a rematch");
+    // The job moves on with the host, and the new host can deal.
+    room.handle(ann, ClientMsg::Leave, 0);
+    assert_eq!(room.host(), Some(bo));
+    room.handle(bo, ClientMsg::Start, 3);
+    assert_eq!(room.game_no(), game + 1);
+}
+
+/// A double press of DEAL or PLAY AGAIN shouldn't be told off over the new deal.
+#[test]
+fn bug_dealing_twice_isnt_an_error() {
+    let mut room = Room::new("AGAIN", "h", 10, true);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
     room.handle(ann, ClientMsg::Start, 4);
-    room.handle(bo, ClientMsg::Start, 5);
+    let game = room.game_no();
+    room.take_outbox();
+    room.handle(ann, ClientMsg::Start, 5);
+    assert_eq!(room.game_no(), game);
     let errors: Vec<_> = room.take_outbox().into_iter().filter(|o| matches!(o.msg, ServerMsg::Error { .. })).collect();
-    assert!(errors.is_empty(), "the second PLAY AGAIN got {:?}", errors[0].msg);
+    assert!(errors.is_empty(), "the second press got {:?}", errors[0].msg);
 }
