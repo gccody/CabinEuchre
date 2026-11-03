@@ -3,7 +3,8 @@
 //! highlight up and down the menu.
 //!
 //! When a game was saved, the menu leads with CONTINUE (and the saved score)
-//! above NEW GAME. PLAY ONLINE opens the lobby (`lobby.rs`).
+//! above NEW GAME, which asks first: there's one save slot, and leaving the new
+//! game would overwrite it. PLAY ONLINE opens the lobby (`lobby.rs`).
 
 use std::f32::consts::PI;
 
@@ -52,6 +53,60 @@ enum Choice {
     Quit,
 }
 
+/// "Start a new game over your saved one?" Keeping it is the first choice, so a
+/// stray double press can't lose a game.
+struct NewGameCheck {
+    keep: Button,
+    start: Button,
+    /// Whether the focus is on NEW GAME rather than on keeping the save.
+    on_start: bool,
+    pop: Spring,
+}
+
+impl NewGameCheck {
+    fn new() -> Self {
+        let mut pop = Spring::new(0.85);
+        pop.target = 1.0;
+        let (keep, start) = if device::mobile() {
+            (
+                Button::brass("KEEP MY GAME", Rect::centered(CX - 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
+                Button::red("NEW GAME", Rect::centered(CX + 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
+            )
+        } else {
+            (
+                Button::brass("KEEP MY GAME", Rect::centered(CX - 66.0, 212.0, 124.0, 24.0)),
+                Button::red("NEW GAME", Rect::centered(CX + 66.0, 212.0, 124.0, 24.0)),
+            )
+        };
+        NewGameCheck { keep, start, on_start: false, pop }
+    }
+
+    fn panel() -> Rect {
+        if device::mobile() { Rect::centered(CX, 180.0, 540.0, 180.0) } else { Rect::centered(CX, 180.0, 320.0, 112.0) }
+    }
+
+    fn draw(&self, saved: Option<&Match>, shared: &Shared, g: &mut Graphics) {
+        let font = &shared.font;
+        crate::ui::dim_screen(g, 0.55);
+        let panel = NewGameCheck::panel();
+        let c = panel.center();
+        g.push();
+        g.translate(c.x, c.y);
+        g.scale(self.pop.value, self.pop.value);
+        g.translate(-c.x, -c.y);
+        crate::ui::panel(g, panel, palette::PANEL);
+        let (title_y, line_y, title) = if device::mobile() { (panel.y + 34.0, panel.y + 70.0, 2.0) } else { (panel.y + 20.0, panel.y + 42.0, 1.5) };
+        Text::new("START A NEW GAME?", CX, title_y).scale(title).color(palette::BRASS_LIGHT).center().draw(g, font);
+        Text::new("It replaces your saved game when you leave it.", CX, line_y).color(palette::CREAM).center().draw(g, font);
+        if let Some(m) = saved {
+            Text::new(&saved_summary(m), CX, line_y + 14.0).color(palette::MUTED).center().draw(g, font);
+        }
+        self.keep.draw(g, font);
+        self.start.draw(g, font);
+        g.pop();
+    }
+}
+
 pub struct Title {
     cards: Vec<FanCard>,
     letters: Vec<Spring>,
@@ -59,6 +114,8 @@ pub struct Title {
     logo_shown: bool,
     buttons: Vec<(Choice, Button)>,
     overlay: Option<Overlay>,
+    /// NEW GAME was pressed with a game saved, and is waiting for an answer.
+    check: Option<NewGameCheck>,
     age: f32,
     /// Index into `buttons` for the gamepad / keyboard focus.
     focus: usize,
@@ -196,6 +253,7 @@ impl Title {
             logo_shown: false,
             buttons,
             overlay: None,
+            check: None,
             age: 0.0,
             focus: 0,
             saved,
@@ -220,8 +278,12 @@ impl Title {
                 };
                 return Transition::Switch(Box::new(table));
             }
-            // A new game leaves the save alone until it's saved over (or this
-            // game finishes), so a stray click can't lose it.
+            // There's one save slot, and leaving a new game saves over it, so ask first.
+            Choice::Play if self.saved.is_some() => {
+                shared.sfx.play(Sound::Pop);
+                self.check = Some(NewGameCheck::new());
+            }
+            // The save stays until it's saved over (or this game finishes).
             Choice::Play => return Transition::Switch(Box::new(Table::new(shared))),
             Choice::Online => return Transition::Switch(Box::new(Lobby::new(shared))),
             Choice::Options => {
@@ -234,6 +296,17 @@ impl Title {
             }
             Choice::Quit => return Transition::Quit,
         }
+        Transition::None
+    }
+
+    /// Answers the new game question.
+    fn answer_check(&mut self, shared: &mut Shared, start: bool) -> Transition {
+        self.check = None;
+        shared.tap();
+        if start {
+            return Transition::Switch(Box::new(Table::new(shared)));
+        }
+        shared.sfx.play(Sound::Select);
         Transition::None
     }
 
@@ -255,7 +328,7 @@ impl Scene for Title {
         // Letters pop in one after another. The logo is wider than the panels,
         // so it ducks out of the way while one is open.
         let logo = logo_lines().concat();
-        let showing = self.overlay.is_none();
+        let showing = self.overlay.is_none() && self.check.is_none();
         for (i, (l, ch)) in self.letters.iter_mut().zip(logo.chars()).enumerate() {
             if !showing {
                 l.target = 0.0;
@@ -269,7 +342,15 @@ impl Scene for Title {
         }
         // Only the first time gets the rising ticks, not every closed panel.
         self.logo_shown |= showing && self.letters.iter().all(|l| l.target == 1.0);
-        let mouse = if self.overlay.is_some() { NO_POINTER } else { shared.mouse };
+        if let Some(check) = &mut self.check {
+            check.pop.update(dt);
+            let focus = shared.focus_visible();
+            check.keep.focused = focus && !check.on_start;
+            check.start.focused = focus && check.on_start;
+            check.keep.update(shared.mouse, dt, &shared.sfx);
+            check.start.update(shared.mouse, dt, &shared.sfx);
+        }
+        let mouse = if self.overlay.is_some() || self.check.is_some() { NO_POINTER } else { shared.mouse };
         let hovered = self.card_under(mouse);
         for (i, c) in self.cards.iter_mut().enumerate() {
             let target_hover = if hovered == Some(i) { 1.0 } else { 0.0 };
@@ -283,7 +364,7 @@ impl Scene for Title {
             let target_face = if c.face_up { 1.0 } else { 0.0 };
             c.face = approach(c.face, target_face, 12.0, dt);
         }
-        let focus = (shared.focus_visible() && self.overlay.is_none()).then_some(self.focus);
+        let focus = (shared.focus_visible() && self.overlay.is_none() && self.check.is_none()).then_some(self.focus);
         for (i, (_, b)) in self.buttons.iter_mut().enumerate() {
             b.focused = focus == Some(i);
             b.update(mouse, dt, &shared.sfx);
@@ -367,6 +448,9 @@ impl Scene for Title {
         if let Some(o) = &self.overlay {
             o.draw(shared, g);
         }
+        if let Some(check) = &self.check {
+            check.draw(self.saved.as_ref(), shared, g);
+        }
     }
 
     fn key_pressed(&mut self, shared: &mut Shared, key: Key) -> Transition {
@@ -375,6 +459,14 @@ impl Scene for Title {
                 self.overlay = None;
             }
             return Transition::None;
+        }
+        if let Some(check) = &self.check {
+            let start = check.on_start;
+            return match key {
+                Key::Escape => self.answer_check(shared, false),
+                Key::Enter | Key::KpEnter | Key::Space => self.answer_check(shared, start),
+                _ => Transition::None,
+            };
         }
         match key {
             Key::Escape if device::back_quits() => Transition::Quit,
@@ -394,6 +486,21 @@ impl Scene for Title {
                 self.overlay = None;
             }
             return Transition::None;
+        }
+        if let Some(check) = &mut self.check {
+            return match nav {
+                Nav::Left | Nav::Right | Nav::Up | Nav::Down => {
+                    check.on_start = !check.on_start;
+                    shared.tick();
+                    Transition::None
+                }
+                Nav::Confirm => {
+                    let start = check.on_start;
+                    self.answer_check(shared, start)
+                }
+                Nav::Back | Nav::Menu => self.answer_check(shared, false),
+                _ => Transition::None,
+            };
         }
         let n = self.buttons.len() as i32;
         match nav {
@@ -442,6 +549,15 @@ impl Scene for Title {
         if let Some(o) = &mut self.overlay {
             if o.mouse_pressed(shared, pos) {
                 self.overlay = None;
+            }
+            return Transition::None;
+        }
+        if let Some(check) = &mut self.check {
+            if check.keep.click(pos, &shared.sfx) {
+                return self.answer_check(shared, false);
+            }
+            if check.start.click(pos, &shared.sfx) {
+                return self.answer_check(shared, true);
             }
             return Transition::None;
         }
