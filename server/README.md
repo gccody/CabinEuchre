@@ -83,8 +83,9 @@ npx wrangler login
 npx wrangler deploy          # prints https://euchre.<your-subdomain>.workers.dev
 ```
 
-Then build the game against it (the address is baked in at build time; `EUCHRE_SERVER` at run time
-overrides it):
+Release builds of the game use the address in `LIVE_SERVER` (`src/net/online.rs`). To build against
+another one, set it at build time (`EUCHRE_SERVER` at run time overrides it, and `build.rs` refuses a
+release build with an address that isn't `wss://`):
 
 ```sh
 EUCHRE_SERVER=wss://euchre.<your-subdomain>.workers.dev cargo build --release

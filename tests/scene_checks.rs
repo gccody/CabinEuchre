@@ -17,7 +17,7 @@
 //! `EUCHRE_SCENE` reaches. `EUCHRE_WINDOW` and `EUCHRE_MOBILE` work as in the game:
 //! `LOVE2DRS_SCREENSHOT=x.png LOVE2DRS_SCREENSHOT_FRAME=30 <test exe> --proof shot_guest_lobby`
 
-#![allow(dead_code, unused_imports, unused_variables)]
+#![allow(dead_code, unused_imports, unused_variables, clippy::type_complexity)]
 
 #[path = "../src/app.rs"]
 mod app;
