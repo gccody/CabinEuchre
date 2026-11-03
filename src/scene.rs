@@ -206,6 +206,12 @@ pub trait Scene {
     /// keeping, like a game in progress.
     fn suspend(&mut self, shared: &mut Shared) {}
 
+    /// What the scene is up to, for the checks that drive it (`tests/scene_checks.rs`).
+    #[allow(dead_code)]
+    fn debug_state(&self) -> String {
+        String::new()
+    }
+
     /// A phone switched away from the game. It's probably coming back, but the
     /// OS may end it without another word, so save anything worth saving. Don't
     /// give anything up, like a seat at an online table.

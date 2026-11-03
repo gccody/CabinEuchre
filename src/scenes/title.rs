@@ -4,7 +4,8 @@
 //!
 //! When a game was saved, the menu leads with CONTINUE (and the saved score)
 //! above NEW GAME, which asks first: there's one save slot, and leaving the new
-//! game would overwrite it. PLAY ONLINE opens the lobby (`lobby.rs`).
+//! game would overwrite it. PLAY ONLINE opens the lobby (`lobby.rs`). LEARN TO
+//! PLAY starts the tutorial, and asks first if there's a lesson to pick back up.
 
 use std::f32::consts::PI;
 
@@ -48,14 +49,25 @@ enum Choice {
     Continue,
     Play,
     Online,
+    Learn,
     Options,
     Rules,
     Quit,
 }
 
-/// "Start a new game over your saved one?" Keeping it is the first choice, so a
+/// What a two-button question on the title is about.
+#[derive(Clone, Copy, PartialEq)]
+enum Asking {
+    /// "Start a new game over your saved one?"
+    NewGame,
+    /// "Pick the tutorial back up?" The lesson (from 0) and the score then.
+    Lesson(usize, [u32; 2]),
+}
+
+/// A question with two answers. Keeping what you have is the first choice, so a
 /// stray double press can't lose a game.
 struct NewGameCheck {
+    asking: Asking,
     keep: Button,
     start: Button,
     /// Whether the focus is on NEW GAME rather than on keeping the save.
@@ -64,21 +76,25 @@ struct NewGameCheck {
 }
 
 impl NewGameCheck {
-    fn new() -> Self {
+    fn new(asking: Asking) -> Self {
         let mut pop = Spring::new(0.85);
         pop.target = 1.0;
+        let (keep_label, start_label) = match asking {
+            Asking::NewGame => ("KEEP MY GAME", "NEW GAME"),
+            Asking::Lesson(..) => ("PICK IT UP", "START OVER"),
+        };
         let (keep, start) = if device::mobile() {
             (
-                Button::brass("KEEP MY GAME", Rect::centered(CX - 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
-                Button::red("NEW GAME", Rect::centered(CX + 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
+                Button::brass(keep_label, Rect::centered(CX - 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
+                Button::red(start_label, Rect::centered(CX + 124.0, 228.0, 232.0, 48.0)).scaled(1.5),
             )
         } else {
             (
-                Button::brass("KEEP MY GAME", Rect::centered(CX - 66.0, 212.0, 124.0, 24.0)),
-                Button::red("NEW GAME", Rect::centered(CX + 66.0, 212.0, 124.0, 24.0)),
+                Button::brass(keep_label, Rect::centered(CX - 66.0, 212.0, 124.0, 24.0)),
+                Button::red(start_label, Rect::centered(CX + 66.0, 212.0, 124.0, 24.0)),
             )
         };
-        NewGameCheck { keep, start, on_start: false, pop }
+        NewGameCheck { asking, keep, start, on_start: false, pop }
     }
 
     fn panel() -> Rect {
@@ -96,10 +112,21 @@ impl NewGameCheck {
         g.translate(-c.x, -c.y);
         crate::ui::panel(g, panel, palette::PANEL);
         let (title_y, line_y, title) = if device::mobile() { (panel.y + 34.0, panel.y + 70.0, 2.0) } else { (panel.y + 20.0, panel.y + 42.0, 1.5) };
-        Text::new("START A NEW GAME?", CX, title_y).scale(title).color(palette::BRASS_LIGHT).center().draw(g, font);
-        Text::new("It replaces your saved game when you leave it.", CX, line_y).color(palette::CREAM).center().draw(g, font);
-        if let Some(m) = saved {
-            Text::new(&saved_summary(m), CX, line_y + 14.0).color(palette::MUTED).center().draw(g, font);
+        match self.asking {
+            Asking::NewGame => {
+                Text::new("START A NEW GAME?", CX, title_y).scale(title).color(palette::BRASS_LIGHT).center().draw(g, font);
+                Text::new("It replaces your saved game when you leave it.", CX, line_y).color(palette::CREAM).center().draw(g, font);
+                if let Some(m) = saved {
+                    Text::new(&saved_summary(m), CX, line_y + 14.0).color(palette::MUTED).center().draw(g, font);
+                }
+            }
+            Asking::Lesson(lesson, scores) => {
+                Text::new("WELCOME BACK!", CX, title_y).scale(title).color(palette::BRASS_LIGHT).center().draw(g, font);
+                let line = format!("Pick up at lesson {} of {}?", lesson + 1, crate::euchre::tutorial::LESSONS);
+                Text::new(&line, CX, line_y).color(palette::CREAM).center().draw(g, font);
+                let score = format!("WE {} · THEY {}", scores[0], scores[1]);
+                Text::new(&score, CX, line_y + 14.0).color(palette::MUTED).center().draw(g, font);
+            }
         }
         self.keep.draw(g, font);
         self.start.draw(g, font);
@@ -156,20 +183,24 @@ fn logo_lines() -> &'static [&'static str] {
 fn mobile_buttons(saved: bool) -> Vec<(Choice, Button)> {
     let (x, w, h) = (470.0, 236.0, 42.0);
     let row = |y: f32| Rect::centered(x, y, w, h);
+    // Two small plaques side by side, sharing a row.
+    let half = |y: f32, side: f32| Rect::centered(x + side * 61.0, y, 114.0, h);
     if saved {
         vec![
             (Choice::Continue, Button::brass("CONTINUE", Rect::centered(x, 71.0, w, 50.0)).scaled(2.0)),
             (Choice::Play, Button::red("NEW GAME", row(143.0)).scaled(1.5)),
             (Choice::Online, online_button(row(194.0)).scaled(1.5)),
-            (Choice::Rules, Button::green("HOW TO PLAY", row(245.0)).scaled(1.5)),
-            (Choice::Options, Button::blue("OPTIONS", row(296.0)).scaled(1.5)),
+            (Choice::Learn, Button::green("LEARN TO PLAY", row(245.0)).scaled(1.5)),
+            (Choice::Rules, Button::blue("RULES", half(296.0, -1.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", half(296.0, 1.0)).scaled(1.5)),
         ]
     } else {
         vec![
             (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(x, 99.0, w, 52.0)).scaled(2.0)),
             (Choice::Online, online_button(row(158.0)).scaled(1.5)),
-            (Choice::Rules, Button::green("HOW TO PLAY", row(212.0)).scaled(1.5)),
-            (Choice::Options, Button::blue("OPTIONS", row(266.0)).scaled(1.5)),
+            (Choice::Learn, Button::green("LEARN TO PLAY", row(212.0)).scaled(1.5)),
+            (Choice::Rules, Button::blue("RULES", half(266.0, -1.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", half(266.0, 1.0)).scaled(1.5)),
         ]
     }
 }
@@ -225,6 +256,8 @@ impl Title {
         let letters = logo_lines().concat().chars().map(|_| Spring::new(0.0)).collect();
         // A single column of plaques under the logo.
         let w = 112.0;
+        // RULES and OPTIONS share a row, as wide as the plaque at the top.
+        let half = |y: f32, side: f32| Rect::centered(CX + side * 34.0, y, 66.0, 18.0);
         let buttons = if device::mobile() {
             mobile_buttons(saved.is_some())
         } else if saved.is_some() {
@@ -234,16 +267,18 @@ impl Title {
                 (Choice::Continue, Button::brass("CONTINUE", Rect::centered(CX, 192.0, w + 24.0, 26.0)).scaled(1.5)),
                 (Choice::Play, Button::red("NEW GAME", Rect::centered(CX, 242.0, w, 18.0))),
                 (Choice::Online, online_button(Rect::centered(CX, 265.0, w, 18.0))),
-                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 288.0, w, 18.0))),
-                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 311.0, w, 18.0))),
+                (Choice::Learn, Button::green("LEARN TO PLAY", Rect::centered(CX, 288.0, w, 18.0))),
+                (Choice::Rules, Button::blue("RULES", half(311.0, -1.0))),
+                (Choice::Options, Button::blue("OPTIONS", half(311.0, 1.0))),
                 (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 334.0, w, 18.0))),
             ]
         } else {
             vec![
                 (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(CX, 214.0, w + 24.0, 26.0)).scaled(1.5)),
                 (Choice::Online, online_button(Rect::centered(CX, 247.0, w, 18.0))),
-                (Choice::Rules, Button::green("HOW TO PLAY", Rect::centered(CX, 271.0, w, 18.0))),
-                (Choice::Options, Button::blue("OPTIONS", Rect::centered(CX, 295.0, w, 18.0))),
+                (Choice::Learn, Button::green("LEARN TO PLAY", Rect::centered(CX, 271.0, w, 18.0))),
+                (Choice::Rules, Button::blue("RULES", half(295.0, -1.0))),
+                (Choice::Options, Button::blue("OPTIONS", half(295.0, 1.0))),
                 (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 319.0, w, 18.0))),
             ]
         };
@@ -281,11 +316,19 @@ impl Title {
             // There's one save slot, and leaving a new game saves over it, so ask first.
             Choice::Play if self.saved.is_some() => {
                 shared.sfx.play(Sound::Pop);
-                self.check = Some(NewGameCheck::new());
+                self.check = Some(NewGameCheck::new(Asking::NewGame));
             }
             // The save stays until it's saved over (or this game finishes).
             Choice::Play => return Transition::Switch(Box::new(Table::new(shared))),
             Choice::Online => return Transition::Switch(Box::new(Lobby::new(shared))),
+            // Part way through the tutorial: ask whether to carry on.
+            Choice::Learn => match shared.settings.lesson {
+                Some((lesson, scores)) => {
+                    shared.sfx.play(Sound::Pop);
+                    self.check = Some(NewGameCheck::new(Asking::Lesson(lesson, scores)));
+                }
+                None => return Transition::Switch(Box::new(Table::tutorial(shared, 0, [0, 0]))),
+            },
             Choice::Options => {
                 shared.sfx.play(Sound::Pop);
                 self.overlay = Some(Overlay::Options(Box::new(OptionsPanel::new())));
@@ -301,13 +344,43 @@ impl Title {
 
     /// Answers the new game question.
     fn answer_check(&mut self, shared: &mut Shared, start: bool) -> Transition {
-        self.check = None;
+        let asking = self.check.take().map(|c| c.asking);
         shared.tap();
+        if let Some(Asking::Lesson(lesson, scores)) = asking {
+            let (lesson, scores) = if start { (0, [0, 0]) } else { (lesson, scores) };
+            return Transition::Switch(Box::new(Table::tutorial(shared, lesson, scores)));
+        }
         if start {
             return Transition::Switch(Box::new(Table::new(shared)));
         }
         shared.sfx.play(Sound::Select);
         Transition::None
+    }
+
+    /// A little tag pointing at LEARN TO PLAY, until the tutorial has been played.
+    fn draw_new_here(&self, shared: &Shared, g: &mut Graphics) {
+        let Some((_, b)) = self.buttons.iter().find(|(c, _)| matches!(c, Choice::Learn)) else { return };
+        let font = &shared.font;
+        let label = "NEW? START HERE";
+        let w = font.width(label) + 14.0;
+        let nudge = (shared.time * 3.5).sin() * 1.5;
+        let mid = b.rect.center().y;
+        let mobile = device::mobile();
+        // On a phone the column runs close to the logo, so the tag stands above the plaque's corner.
+        let (x, y) = if mobile { (b.rect.x + b.rect.w - w, b.rect.y - 8.0 + nudge) } else { (b.rect.x + b.rect.w + 12.0 + nudge, mid - 7.0) };
+        g.set_color(palette::INK);
+        crate::ui::chamfer(g, Fill, x - 1.0, y - 1.0, w + 2.0, 16.0, 4.0);
+        if !mobile {
+            g.polygon(Fill, &[x + 1.0, mid - 6.0, x - 7.0, mid, x + 1.0, mid + 6.0]);
+        }
+        g.set_color(palette::BRASS);
+        crate::ui::chamfer(g, Fill, x, y, w, 14.0, 3.0);
+        if !mobile {
+            g.polygon(Fill, &[x + 1.0, mid - 4.0, x - 5.0, mid, x + 1.0, mid + 4.0]);
+        }
+        g.set_color(palette::BRASS_LIGHT);
+        g.rectangle(Fill, x + 3.0, y, w - 6.0, 1.0);
+        Text::new(label, x + w / 2.0, y + 7.0).color(palette::INK).shadow(palette::BRASS_LIGHT.with_alpha(0.5)).center().draw(g, font);
     }
 
     fn card_under(&self, p: Vec2) -> Option<usize> {
@@ -437,6 +510,9 @@ impl Scene for Title {
         for (_, b) in &self.buttons {
             b.draw(g, font);
         }
+        if !shared.settings.tutorial_done && shared.settings.lesson.is_none() {
+            self.draw_new_here(shared, g);
+        }
         if let (Some(m), Some((_, b))) = (&self.saved, self.buttons.first()) {
             // Top-anchored, so the gap is measured from the plaque's real bottom edge.
             Text::new(&saved_summary(m), b.rect.center().x, b.rect.y + b.rect.h + PLAQUE_BELOW + SUMMARY_GAP)
@@ -463,7 +539,11 @@ impl Scene for Title {
         if let Some(check) = &self.check {
             let start = check.on_start;
             return match key {
-                Key::Escape => self.answer_check(shared, false),
+                Key::Escape => {
+                    self.check = None;
+                    shared.sfx.play(Sound::Select);
+                    Transition::None
+                }
                 Key::Enter | Key::KpEnter | Key::Space => self.answer_check(shared, start),
                 _ => Transition::None,
             };
@@ -498,7 +578,12 @@ impl Scene for Title {
                     let start = check.on_start;
                     self.answer_check(shared, start)
                 }
-                Nav::Back | Nav::Menu => self.answer_check(shared, false),
+                Nav::Back | Nav::Menu => {
+                    self.check = None;
+                    shared.tap();
+                    shared.sfx.play(Sound::Select);
+                    Transition::None
+                }
                 _ => Transition::None,
             };
         }
@@ -507,6 +592,16 @@ impl Scene for Title {
             Nav::Up | Nav::Down => {
                 self.focus = (self.focus as i32 + nav.dy()).rem_euclid(n) as usize;
                 shared.tick();
+            }
+            // RULES and OPTIONS share a row.
+            Nav::Left | Nav::Right if matches!(self.buttons[self.focus].0, Choice::Rules | Choice::Options) => {
+                let want = |c: &Choice| if nav == Nav::Left { matches!(c, Choice::Rules) } else { matches!(c, Choice::Options) };
+                if let Some(i) = self.buttons.iter().position(|(c, _)| want(c))
+                    && i != self.focus
+                {
+                    self.focus = i;
+                    shared.tick();
+                }
             }
             // B jumps to QUIT rather than quitting outright.
             Nav::Back if !device::mobile() && self.focus != self.buttons.len() - 1 => {

@@ -104,6 +104,39 @@ pub fn dim_screen(g: &mut Graphics, alpha: f32) {
     }
 }
 
+/// Dims the screen except inside `holes`, for a spotlight: horizontal bands
+/// around the holes, so no spot gets dimmed twice.
+pub fn dim_around(g: &mut Graphics, alpha: f32, holes: &[Rect]) {
+    let (left, right, top, bottom) = if device::mobile() { (-2000.0, 2640.0, -2000.0, 2360.0) } else { (-20.0, 680.0, -20.0, 380.0) };
+    g.set_color(palette::INK.with_alpha(alpha));
+    let mut ys: Vec<f32> = vec![top, bottom];
+    for h in holes {
+        ys.push(h.y.clamp(top, bottom));
+        ys.push((h.y + h.h).clamp(top, bottom));
+    }
+    ys.sort_by(f32::total_cmp);
+    ys.dedup();
+    for band in ys.windows(2) {
+        let (y0, y1) = (band[0], band[1]);
+        let mut spans: Vec<(f32, f32)> = holes
+            .iter()
+            .filter(|h| h.y <= y0 && h.y + h.h >= y1)
+            .map(|h| (h.x, h.x + h.w))
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut x = left;
+        for (a, b) in spans {
+            if a > x {
+                g.rectangle(Fill, x, y0, a - x, y1 - y0);
+            }
+            x = x.max(b);
+        }
+        if x < right {
+            g.rectangle(Fill, x, y0, right - x, y1 - y0);
+        }
+    }
+}
+
 /// Rough perceived brightness, to pick a text shadow that suits a fill.
 fn luma(c: Color) -> f32 {
     0.299 * c.r + 0.587 * c.g + 0.114 * c.b

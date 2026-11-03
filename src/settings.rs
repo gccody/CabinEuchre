@@ -23,6 +23,10 @@ pub struct Settings {
     pub rumble: bool,
     /// Your name at online tables (empty: the Steam name, else "PLAYER").
     pub name: String,
+    /// The tutorial has been finished once.
+    pub tutorial_done: bool,
+    /// Where the tutorial was left: `(lesson, scores)`, to offer picking it back up.
+    pub lesson: Option<(usize, [u32; 2])>,
 }
 
 /// Where the game keeps its files: `%APPDATA%\CabinEuchre` on Windows,
@@ -52,8 +56,19 @@ impl Default for Settings {
             fullscreen: false,
             rumble: true,
             name: String::new(),
+            tutorial_done: false,
+            lesson: None,
         }
     }
+}
+
+/// Reads the `lesson` line: `lesson,us,them`, anything else means none.
+fn parse_lesson(v: &str) -> Option<(usize, [u32; 2])> {
+    let mut parts = v.split(',').map(|p| p.trim().parse::<u32>().ok());
+    let (lesson, us, them) = (parts.next()??, parts.next()??, parts.next()??);
+    let target = crate::euchre::tutorial::TARGET;
+    let fits = (lesson as usize) < crate::euchre::tutorial::LESSONS && us < target && them < target;
+    fits.then_some((lesson as usize, [us, them]))
 }
 
 impl Settings {
@@ -105,6 +120,8 @@ impl Settings {
                 "fullscreen" => s.fullscreen = b,
                 "rumble" => s.rumble = b,
                 "name" if !v.is_empty() => s.name = crate::euchre::protocol::clean_name(v),
+                "tutorial_done" => s.tutorial_done = b,
+                "lesson" => s.lesson = parse_lesson(v),
                 _ => {}
             }
         }
@@ -120,7 +137,7 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\nname={}\n",
+            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\nname={}\ntutorial_done={}\nlesson={}\n",
             self.volume,
             self.music,
             self.atmosphere,
@@ -129,7 +146,9 @@ impl Settings {
             self.target,
             self.fullscreen,
             self.rumble,
-            self.name
+            self.name,
+            self.tutorial_done,
+            self.lesson.map_or(String::new(), |(l, s)| format!("{l},{},{}", s[0], s[1]))
         );
         // Write beside the file and rename, so a crash mid-write can't lose the settings.
         let tmp = path.with_extension("tmp");

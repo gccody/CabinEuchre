@@ -40,6 +40,19 @@ pub fn prompt_y(bidding: bool) -> f32 {
     }
 }
 
+/// The bottom edge of Benny's note below the trick: clear of your hand, and further
+/// clear of it when a card might be lifted because you're about to play.
+pub fn note_low_bottom(holding: bool) -> f32 {
+    let scale = if device::mobile() { MOBILE_HUMAN_SCALE } else { HUMAN_SCALE };
+    let top_of_hand = hand_anchor(HUMAN).y - CARD_H * scale / 2.0;
+    top_of_hand - if holding { 6.0 } else { 16.0 }
+}
+
+/// The bottom edge of Benny's note above the pile, clear of the up card.
+pub fn note_high_bottom() -> f32 {
+    pile_center().y - CARD_H / 2.0 - 7.0
+}
+
 /// Where things that would sit on the fold go instead, as an offset from the table's
 /// center: `folded` while the fold is fully in play, eased from nothing before that.
 fn past_fold(folded: impl Fn(render::Fold) -> f32) -> f32 {
@@ -362,7 +375,7 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
                 order: z,
             },
             Place::Trick(seat) => {
-                let glow = t.winner_glow.is_some_and(|(c, _)| c == card);
+                let glow = t.winner_glow.is_some_and(|(c, _)| c == card) || (t.hover == Some(card) && t.coach_holding());
                 Target {
                     pos: trick_spot(seat),
                     rot: jitter(card),
@@ -416,6 +429,11 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
         };
         out[id] = target;
     }
+    if t.coach.is_some() {
+        for (id, target) in out.iter_mut().enumerate() {
+            t.coach_adjust(Card::from_id(id), target);
+        }
+    }
     out
 }
 
@@ -433,6 +451,21 @@ pub fn card_at(t: &Table, p: Vec2) -> Option<Card> {
         // A little extra reach upward so a lifted card stays hovered.
         (local.x.abs() <= hw && local.y >= -hh - 10.0 && local.y <= hh + below).then_some(card)
     })
+}
+
+/// The card of the trick under `p`, topmost first (a quiz asks you to point at one).
+pub fn trick_card_at(t: &Table, p: Vec2) -> Option<Card> {
+    let (hw, hh) = (CARD_W / 2.0, CARD_H / 2.0);
+    t.game
+        .round
+        .trick
+        .iter()
+        .rev()
+        .find(|&&(seat, _)| {
+            let at = trick_spot(seat);
+            (p.x - at.x).abs() <= hw && (p.y - at.y).abs() <= hh
+        })
+        .map(|&(_, card)| card)
 }
 
 #[cfg(test)]

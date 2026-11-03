@@ -102,6 +102,61 @@ const JACK: &[&str] = &[
     "kkkkkkkkkkkkkkk",
 ];
 
+/// Benny's face, 24x24 at 2 texels per cell. `m` is his mouth, which opens a row further
+/// while he's talking (see [`paint_sprite`]). k ink, r/R knit cap, c/C its band, s/S skin,
+/// h/H beard, b black and r red for his buffalo-check shirt, '.' shows what's behind.
+const BENNY: &[&str] = &[
+    "........kkkkkkkk........",
+    "......kkrrrrrrrrkk......",
+    ".....krrrrrrrrrrrrk.....",
+    "....krrRrrRrrRrrRrrk....",
+    "....krrRrrRrrRrrRrrk....",
+    "...kccCccCccCccCccCck...",
+    "...kccCccCccCccCccCck...",
+    "...kkkkkkkkkkkkkkkkkk...",
+    "...khsssssssssssssshk...",
+    "...khsssssssssssssshk...",
+    "...khsseesssssseesshk...",
+    "...khsseesssssseesshk...",
+    "...khsssssssSSsssssshk..",
+    "...khhsssHHHHHHssshhk...",
+    "...khhhhHHHHHHHHhhhhk...",
+    "...khhhhhHmmmmHhhhhhk...",
+    "...khhhhhhHHHHhhhhhhk...",
+    "....khhhhhhhhhhhhhhk....",
+    "..kkrbkhhhhhhhhhhkbrkk..",
+    ".krrbbrkkhhhhhhkkrbbrrk.",
+    "krrbbrrbbkkkkkkbbrrbbrrk",
+    "kbbrrbbrrbbrrbbrrbbrrbbk",
+    "kbbrrbbrrbbrrbbrrbbrrbbk",
+    "kkkkkkkkkkkkkkkkkkkkkkkk",
+];
+
+/// The row of [`BENNY`] under his mouth, and what it becomes when the mouth is open.
+const BENNY_CHIN: (&str, &str) = ("...khhhhhhHHHHhhhhhhk...", "...khhhhhHmmmmHhhhhhk...");
+
+/// The pointing glove, 14x18 at 2 texels per cell.
+const GLOVE: &[&str] = &[
+    "....kk........",
+    "...kwwk.......",
+    "...kwwk.......",
+    "...kwwk.......",
+    "...kwwkkk.....",
+    "...kwwkwwkk...",
+    "...kwwkwwkwkk.",
+    "kk.kwwwwwkwkwk",
+    "kwkkwwwwwwwwwk",
+    "kwwkwwwwwwwwwk",
+    ".kwwwwwwwwwwwk",
+    ".kwwwwwwwwwwCk",
+    "..kwwwwwwwwCk.",
+    "..kwwwwwwwCCk.",
+    "...kwwwwwCCk..",
+    "...kBBBBBBBk..",
+    "...kDDDDDDDk..",
+    "...kkkkkkkkk..",
+];
+
 /// Where and how a card is drawn: center position, rotation and scale (in design space).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {
@@ -129,6 +184,10 @@ pub struct CardArt {
     back: Quad,
     /// White suit icons (tinted when drawn): `icons[size_index][suit_index]`.
     icons: Vec<Vec<Quad>>,
+    coach_image: Image,
+    /// Benny's face: mouth shut, then open.
+    benny: [Quad; 2],
+    glove: Quad,
 }
 
 impl CardArt {
@@ -170,10 +229,27 @@ impl CardArt {
             y0 += size + PAD;
         }
 
+        // Benny and the glove get a small atlas of their own, so the cards' sampling
+        // stays exactly the same.
+        let benny_w = 2 * BENNY[0].len() as u32;
+        let benny_h = 2 * BENNY.len() as u32;
+        let glove_x = 3 * PAD + 2 * benny_w;
+        let (glove_w, glove_h) = (2 * GLOVE[0].len() as u32, 2 * GLOVE.len() as u32);
+        let mut coach = ImageData::new(glove_x + glove_w + PAD, 2 * PAD + benny_h.max(glove_h));
+        paint_sprite(&mut coach, PAD, PAD, BENNY, false);
+        paint_sprite(&mut coach, 2 * PAD + benny_w, PAD, BENNY, true);
+        paint_sprite(&mut coach, glove_x, PAD, GLOVE, false);
+        let coach_image = g.new_image_from_data(&coach);
+        coach_image.set_filter(FilterMode::Linear);
+        coach_image.set_wrap(WrapMode::Clamp);
+
         let image = g.new_image_from_data(&data);
         image.set_filter(FilterMode::Linear);
         image.set_wrap(WrapMode::Clamp);
         CardArt {
+            coach_image,
+            benny: [bordered(PAD, PAD, benny_w, benny_h), bordered(2 * PAD + benny_w, PAD, benny_w, benny_h)],
+            glove: bordered(glove_x, PAD, glove_w, glove_h),
             image,
             faces,
             back: bordered(bx as u32, by as u32, TEX_W, TEX_H),
@@ -201,6 +277,22 @@ impl CardArt {
         let shadow = palette::INK.with_alpha(palette::SHADOW_ALPHA * color.a);
         g.draw_quad_ex(&self.image, q, p.pos(pos.x, pos.y + scale).color(shadow));
         g.draw_quad_ex(&self.image, q, p.color(color));
+    }
+
+    /// Benny's face, centered on `at`.
+    pub fn draw_portrait(&self, g: &mut Graphics, at: Vec2, mouth_open: bool, scale: f32) {
+        let q = self.benny[usize::from(mouth_open)];
+        let p = DrawParams::at(at.x, at.y).scale(scale / DENSITY).origin((q.w / 2.0).floor(), (q.h / 2.0).floor());
+        g.draw_quad_ex(&self.coach_image, q, p.color(Color::WHITE));
+    }
+
+    /// The pointing glove, with its fingertip at `tip`.
+    pub fn draw_pointer(&self, g: &mut Graphics, tip: Vec2, rotation: f32, alpha: f32) {
+        // The fingertip is the top of the glove's fifth column of cells.
+        let p = DrawParams::at(tip.x, tip.y).rotation(rotation).scale(1.0 / DENSITY).origin(BORDER + 9.0, BORDER);
+        let shadow = palette::INK.with_alpha(palette::SHADOW_ALPHA * alpha);
+        g.draw_quad_ex(&self.coach_image, self.glove, p.pos(tip.x + 2.0, tip.y + 3.0).color(shadow));
+        g.draw_quad_ex(&self.coach_image, self.glove, p.color(Color::WHITE.with_alpha(alpha)));
     }
 
     /// The face quad, or the back for `None`.
@@ -238,6 +330,35 @@ pub fn suit_color(suit: Suit) -> Color {
 /// Suit color for drawing on dark panels (black suits become cream).
 pub fn suit_color_on_dark(suit: Suit) -> Color {
     if suit.is_red() { palette::SUIT_RED_LIGHT } else { palette::CREAM }
+}
+
+/// Paints one of the small sprites above into the atlas, each cell as 2x2 texels.
+fn paint_sprite(data: &mut ImageData, x0: u32, y0: u32, rows: &[&str], mouth_open: bool) {
+    for (y, row) in rows.iter().enumerate() {
+        let row: &str = if mouth_open && *row == BENNY_CHIN.0 { BENNY_CHIN.1 } else { row };
+        for (x, b) in row.bytes().enumerate() {
+            let color = match b {
+                b'k' | b'e' => palette::INK,
+                b'r' => palette::BACK,
+                b'R' => palette::BACK_DARK,
+                b'b' => palette::BACK_BLACK,
+                b'c' | b'w' => palette::CREAM,
+                b'C' => palette::CREAM_SHADE,
+                b's' => palette::SKIN,
+                b'S' => palette::SKIN_SHADE,
+                b'h' => palette::HAIR,
+                b'H' => palette::HAIR_DARK,
+                b'm' => palette::RED_DARK,
+                b'B' => palette::BRASS,
+                b'D' => palette::BRASS_DARK,
+                _ => continue,
+            };
+            let (px, py) = (x0 + 2 * x as u32, y0 + 2 * y as u32);
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                data.set_pixel(px + dx, py + dy, color);
+            }
+        }
+    }
 }
 
 struct Painter<'a> {

@@ -28,9 +28,13 @@
 //!
 //! - `layout.rs` where each place is on screen
 //! - `draw.rs`   all rendering (cards, sidebar, prompts, panels)
+//! - `coach.rs`, `coach_draw.rs`, `lessons.rs` the tutorial: Benny teaching at this table
 
+mod coach;
+mod coach_draw;
 mod draw;
 mod layout;
+mod lessons;
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -136,6 +140,8 @@ enum Cue {
     Say(Seat, String),
     /// Moves cards straight to their places with one sound (laying out a resumed hand).
     Lay(Vec<(Card, Place)>, Sound),
+    /// The tutorial: a moment in the hand when Benny may have something to say.
+    Coach(coach::When),
 }
 
 /// What the human is being asked to do.
@@ -277,6 +283,8 @@ pub struct Table {
     autoplay: bool,
     /// Seconds the AI waits before acting (scaled by the speed setting).
     delay: f32,
+    /// The tutorial's coach, and only in the tutorial.
+    coach: Option<Box<coach::Coach>>,
 }
 
 impl Table {
@@ -426,6 +434,7 @@ impl Table {
             trump_pop: Spring::new(1.0),
             autoplay: crate::device::var("EUCHRE_AUTOPLAY").is_some_and(|v| v == "1"),
             delay: shared.settings.delay_factor(),
+            coach: None,
         }
     }
 
@@ -578,6 +587,7 @@ impl Table {
                 self.game = m;
                 self.score_shown = self.game.scores;
                 self.reset_hand_state();
+                self.coach_new_hand();
                 self.begin_hand();
             }
             Err(e) => {
@@ -630,6 +640,9 @@ impl Table {
     fn begin_hand(&mut self) {
         self.cue(Cue::Gather);
         self.cue(Cue::Wait(0.55));
+        if self.link.is_tutorial() {
+            self.cue(Cue::Coach(coach::When::BeforeDeal));
+        }
         self.cue(Cue::Shuffle);
         self.cue(Cue::Wait(0.5));
         let r = &self.game.round;
@@ -811,7 +824,7 @@ impl Table {
                 // Only if nothing (a timed-out turn, a resync) came in meanwhile.
                 if self.game.round.to_act() == Some(seat) && seat == HUMAN && self.pending.is_empty() {
                     // The AI only reads what this seat can know, so it plays from the mirror.
-                    let action = ai::choose(&self.game.round, seat);
+                    let action = self.coach_auto_action().unwrap_or_else(|| ai::choose(&self.game.round, seat));
                     self.perform(seat, action, shared);
                 }
             }
@@ -847,6 +860,12 @@ impl Table {
             // The room has already dealt again; `drive` takes the deal next.
             Cue::Redeal => self.hand_done = true,
             Cue::Say(seat, text) => self.say(seat, text),
+            Cue::Coach(when) => {
+                if when == coach::When::BeforeDeal {
+                    self.coach_save_progress(shared);
+                }
+                self.coach_gate(Some(when), shared);
+            }
             Cue::Lay(cards, sound) => {
                 for (card, place) in cards {
                     self.move_card(card, place);
@@ -880,12 +899,19 @@ impl Table {
         if self.banner.is_some() {
             return;
         }
+        if self.coach_gate(None, shared) {
+            return;
+        }
         let r = &self.game.round;
         match r.phase {
             Phase::TrickDone => {
+                let trick = r.tricks_played();
                 self.cue(Cue::Wait(0.35));
                 self.cue(Cue::HighlightWinner);
                 self.cue(Cue::Wait(0.75));
+                if self.coach.is_some() {
+                    self.cue(Cue::Coach(coach::When::TrickWon(trick)));
+                }
                 self.cue(Cue::CollectTrick);
                 self.cue(Cue::Wait(0.3));
             }
@@ -910,9 +936,11 @@ impl Table {
                     self.next_from_room();
                 } else if !self.autoplay {
                     self.setup_prompt(&shared.cards);
+                    self.coach_on_prompt();
                 } else if self.prompt == Prompt::None {
                     // Autoplay: show the prompt for a moment, then let the AI decide.
                     self.setup_prompt(&shared.cards);
+                    self.coach_on_prompt();
                     self.cue(Cue::Wait(1.2));
                     self.cue(Cue::AiAct(seat));
                 }
@@ -930,13 +958,20 @@ impl Table {
         debug_assert_eq!(seat, HUMAN);
         let before = self.game.round.phase;
         let dealer = self.game.round.dealer;
+        let round_before = self.coach.is_some().then(|| self.game.round.clone());
         if let Err(e) = self.game.act(action) {
             shared.sfx.play(Sound::Deny);
-            self.hint = Some((explain(e, &self.game.round), 2.2));
+            let why = explain(e, &self.game.round);
+            if !self.coach_refused(&why) {
+                self.hint = Some((why, 2.2));
+            }
             return false;
         }
         self.link.send(ClientMsg::Act { action });
         self.show_action(seat, action, before, dealer, shared);
+        if let Some(round) = round_before {
+            self.coach_after_move(&round, action);
+        }
         true
     }
 
@@ -950,6 +985,7 @@ impl Table {
                     self.swap_cards(a, b);
                 }
                 self.show_action(mv.seat, action, before, dealer, shared);
+                self.coach_let_it_land();
                 if mv.seat == HUMAN {
                     // A speech bubble: the next seat's move clears any hint at once.
                     self.cue(Cue::Say(HUMAN, "Out of time!".into()));
@@ -1136,6 +1172,9 @@ impl Table {
             if let Some(m) = self.link.local_match() {
                 savegame::forget(m.id);
             }
+            if self.coach.is_some() {
+                self.coach_finished(shared);
+            }
             if self.autoplay {
                 eprintln!(
                     "[euchre] autoplay: game over after {} hands, {}-{}",
@@ -1144,18 +1183,25 @@ impl Table {
             }
             let mut pop = Spring::new(0.4);
             pop.target = 1.0;
+            // The tutorial's report is a taller panel, with a longer word on the button.
+            let (again_label, button_y, gap, width) = match (self.coach.is_some(), device::mobile()) {
+                (true, true) => ("PLAY FOR REAL", 258.0, 68.0, 126.0),
+                (true, false) => ("PLAY FOR REAL", 258.0, 66.0, 122.0),
+                (false, true) => ("PLAY AGAIN", 240.0, 68.0, 126.0),
+                (false, false) => ("PLAY AGAIN", 236.0, 56.0, 100.0),
+            };
             self.game_over = Some(GameOver {
                 won,
                 pop,
                 again: if device::mobile() {
-                    Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 68.0, 240.0, 126.0, 38.0)).scaled(1.2)
+                    Button::brass(again_label, Rect::centered(layout::CENTER.x - gap, button_y, width, 38.0)).scaled(1.2)
                 } else {
-                    Button::brass("PLAY AGAIN", Rect::centered(layout::CENTER.x - 56.0, 236.0, 100.0, 22.0))
+                    Button::brass(again_label, Rect::centered(layout::CENTER.x - gap, button_y, width, 22.0))
                 },
                 menu: if device::mobile() {
-                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 68.0, 240.0, 126.0, 38.0)).scaled(1.2)
+                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + gap, button_y, width, 38.0)).scaled(1.2)
                 } else {
-                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + 56.0, 236.0, 100.0, 22.0))
+                    Button::grey("MAIN MENU", Rect::centered(layout::CENTER.x + gap, button_y, width, 22.0))
                 },
                 age: 0.0,
                 focus: 0,
@@ -1343,6 +1389,9 @@ impl Table {
     }
 
     fn click_bid(&mut self, bid: Bid, shared: &mut Shared) {
+        if !self.coach_allows_bid(bid, shared) {
+            return;
+        }
         let r = &self.game.round;
         match bid {
             Bid::Alone => {
@@ -1376,6 +1425,12 @@ impl Table {
     }
 
     fn click_card(&mut self, card: Card, shared: &mut Shared) {
+        if self.prompt == Prompt::Play && !self.coach_allows_card(card, shared) {
+            let sprite = &mut self.sprites[card.id()];
+            sprite.rot.impulse(2.5);
+            sprite.x.impulse(60.0);
+            return;
+        }
         match self.prompt {
             Prompt::Play => {
                 if !self.perform(HUMAN, Action::Play { card }, shared) {
@@ -1398,7 +1453,7 @@ impl Table {
 
     /// Whether the human may interact with the table right now.
     fn input_open(&self) -> bool {
-        self.pause.is_none() && self.overlay.is_none() && self.game_over.is_none() && self.banner.is_none()
+        self.pause.is_none() && self.overlay.is_none() && self.game_over.is_none() && self.banner.is_none() && !self.coach_holding()
     }
 
     fn open_pause(&mut self, shared: &Shared) {
@@ -1417,6 +1472,8 @@ impl Table {
         // aren't saved: leaving hands your seat to a bot.
         let quit_label = if self.link.is_online() {
             "LEAVE TABLE"
+        } else if self.link.is_tutorial() && self.game_over.is_none() {
+            "LEAVE LESSON"
         } else if self.game_over.is_some() {
             "MAIN MENU"
         } else {
@@ -1506,6 +1563,8 @@ impl Table {
         if b.activate(&shared.sfx) {
             shared.tap();
             self.click_bid(bid, shared);
+        } else {
+            self.coach_disabled_key(bid, shared);
         }
     }
 
@@ -1515,7 +1574,14 @@ impl Table {
 
     fn animate(&mut self, shared: &mut Shared, dt: f32) {
         // Hover is tested against resting positions, so a lifted card doesn't flicker.
-        let hovered = if !self.input_open() {
+        let quiz = self.quiz_cards();
+        let hovered = if !quiz.is_empty() {
+            if shared.focus_visible() {
+                self.coach.as_ref().and_then(|c| quiz.get(c.quiz_focus).copied())
+            } else {
+                self.quiz_card_at(shared.mouse)
+            }
+        } else if !self.input_open() {
             None
         } else if shared.focus_visible() {
             self.focused_card()
@@ -1678,10 +1744,10 @@ impl Scene for Table {
             }
         }
 
-        if self.pause.is_none() && self.overlay.is_none() {
+        if self.pause.is_none() && self.overlay.is_none() && !self.coach_holding() {
             self.wait -= dt;
             let mut guard = 0;
-            while self.wait <= 0.0 && guard < 64 {
+            while self.wait <= 0.0 && guard < 64 && !self.coach_holding() {
                 guard += 1;
                 match self.cues.pop_front() {
                     Some(cue) => self.run(cue, shared),
@@ -1698,10 +1764,13 @@ impl Scene for Table {
             }
         }
 
+        self.coach_update(shared, dt);
+
         let open = self.input_open();
         let mouse = if open { shared.mouse } else { NO_POINTER };
-        for (i, (_, b)) in self.bids.iter_mut().enumerate() {
-            b.focused = focus && open && i == self.bid_focus;
+        let pointed = self.coach_pointed_bid();
+        for (i, (bid, b)) in self.bids.iter_mut().enumerate() {
+            b.focused = (focus && open && i == self.bid_focus) || (open && pointed == Some(*bid));
             b.update(mouse, dt, &shared.sfx);
         }
         if device::mobile() {
@@ -1752,6 +1821,10 @@ impl Scene for Table {
         self.draw_table(shared, g);
     }
 
+    fn debug_state(&self) -> String {
+        self.coach_state()
+    }
+
     fn background(&mut self, _shared: &mut Shared) {
         // An online seat stays yours while the connection is down for a while.
         if !self.link.is_online() {
@@ -1790,9 +1863,15 @@ impl Scene for Table {
             self.open_pause(shared);
             return Transition::None;
         }
+        if self.coach_key(key, shared) {
+            return Transition::None;
+        }
         if let Some(go) = &mut self.game_over {
             if matches!(key, Key::Enter | Key::Space) {
                 go.again.activate(&shared.sfx);
+                if self.coach.is_some() {
+                    return self.coach_play_for_real(shared);
+                }
                 self.new_game(shared);
             }
             return Transition::None;
@@ -1822,6 +1901,7 @@ impl Scene for Table {
                     self.click_bid(bid, shared);
                 } else {
                     shared.sfx.play(Sound::Deny);
+                    self.coach_disabled_key(bid, shared);
                 }
             }
             return Transition::None;
@@ -1872,6 +1952,9 @@ impl Scene for Table {
             self.open_pause(shared);
             return Transition::None;
         }
+        if self.game_over.is_none() && self.banner.is_none() && self.coach_nav(nav, shared) {
+            return Transition::None;
+        }
         if let Some(go) = &mut self.game_over {
             match nav {
                 Nav::Left | Nav::Right | Nav::Up | Nav::Down => {
@@ -1881,6 +1964,9 @@ impl Scene for Table {
                 Nav::Confirm if go.focus == 0 => {
                     if go.again.activate(&shared.sfx) {
                         shared.tap();
+                    }
+                    if self.coach.is_some() {
+                        return self.coach_play_for_real(shared);
                     }
                     self.new_game(shared);
                 }
@@ -1985,8 +2071,14 @@ impl Scene for Table {
             self.open_pause(shared);
             return Transition::None;
         }
+        if self.game_over.is_none() && self.banner.is_none() && self.coach_mouse(pos, shared) {
+            return Transition::None;
+        }
         if let Some(go) = &mut self.game_over {
             if go.again.click(pos, &shared.sfx) {
+                if self.coach.is_some() {
+                    return self.coach_play_for_real(shared);
+                }
                 self.new_game(shared);
             } else if go.menu.click(pos, &shared.sfx) {
                 return self.quit_to_title(shared);
@@ -2009,6 +2101,7 @@ impl Scene for Table {
             self.click_bid(bid, shared);
             return Transition::None;
         }
+        self.coach_disabled_bid(pos, shared);
         if let Some(card) = layout::card_at(self, pos) {
             self.click_card(card, shared);
         }

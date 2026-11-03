@@ -16,6 +16,9 @@
 //! `shot_*` aren't checks: they set a scene up for a screenshot, for screens no
 //! `EUCHRE_SCENE` reaches. `EUCHRE_WINDOW` and `EUCHRE_MOBILE` work as in the game:
 //! `LOVE2DRS_SCREENSHOT=x.png LOVE2DRS_SCREENSHOT_FRAME=30 <test exe> --proof shot_guest_lobby`
+//!
+//! The `tutorial_*` checks walk the lessons like a player would. `EUCHRE_PROOF_SPEED=3`
+//! hurries them up, and `EUCHRE_PROOF_SHOTS=dir` saves a picture of every beat.
 
 #![allow(dead_code, unused_imports, unused_variables, clippy::type_complexity)]
 
@@ -111,6 +114,20 @@ const PROOFS: &[(&str, fn())] = &[
     ("server_restart_marks_absent_players_away", server_restart_marks_absent_players_away),
     ("idle_connection_stays_up", idle_connection_stays_up),
     ("release_exe_has_no_console_window", release_exe_has_no_console_window),
+    ("tutorial_plays_through", tutorial_plays_through),
+    ("tutorial_wrong_answers_are_explained", tutorial_wrong_answers_are_explained),
+    ("tutorial_mouse_and_touch_work", tutorial_mouse_and_touch_work),
+    ("tutorial_leaves_the_saved_game_alone", tutorial_leaves_the_saved_game_alone),
+    ("tutorial_picks_up_where_you_left_off", tutorial_picks_up_where_you_left_off),
+    ("tutorial_finishing_is_remembered", tutorial_finishing_is_remembered),
+    ("tutorial_hint_points_at_a_move", tutorial_hint_points_at_a_move),
+    ("tutorial_quiet_lessons_stay_quiet", tutorial_quiet_lessons_stay_quiet),
+    ("tutorial_can_be_lost", tutorial_can_be_lost),
+    ("tutorial_runs_past_the_script", tutorial_runs_past_the_script),
+    ("title_learn_starts_the_first_lesson", title_learn_starts_the_first_lesson),
+    ("title_learn_picks_it_up", title_learn_picks_it_up),
+    ("title_learn_starts_over", title_learn_starts_over),
+    ("title_learn_question_backs_out", title_learn_question_backs_out),
 ];
 
 fn main() {
@@ -289,6 +306,8 @@ enum Step {
 struct H {
     shared: Shared,
     scene: Option<Box<dyn Scene>>,
+    /// Saves the next frame to this file.
+    shot: Option<std::path::PathBuf>,
 }
 
 impl H {
@@ -308,6 +327,33 @@ impl H {
         let t = scene.nav(&mut self.shared, nav);
         self.scene = Some(scene);
         self.apply(t);
+    }
+
+    fn click(&mut self, pos: Vec2) {
+        self.shared.input = InputMode::Mouse;
+        let mut scene = self.scene.take().unwrap();
+        let t = scene.mouse_pressed(&mut self.shared, pos, MouseButton::Left);
+        self.scene = Some(scene);
+        self.apply(t);
+    }
+
+    fn tap(&mut self, pos: Vec2) {
+        self.shared.input = InputMode::Touch;
+        let mut scene = self.scene.take().unwrap();
+        let t = scene.touch_released(&mut self.shared, pos);
+        self.scene = Some(scene);
+        self.apply(t);
+    }
+
+    fn key(&mut self, key: Key) {
+        let mut scene = self.scene.take().unwrap();
+        let t = scene.key_pressed(&mut self.shared, key);
+        self.scene = Some(scene);
+        self.apply(t);
+    }
+
+    fn state(&mut self) -> String {
+        self.scene().debug_state()
     }
 }
 
@@ -343,7 +389,7 @@ fn script(make_scene: impl FnOnce(&Shared) -> Box<dyn Scene> + 'static, steps: V
         ctx.audio.set_volume(0.0);
         let scene = make_scene(&shared);
         let renderer = render::Renderer::new(&mut ctx.graphics, &ctx.window)?;
-        Ok(Harness { renderer, h: H { shared, scene: Some(scene) }, steps: steps.into(), waiting: 0.0, since: 0.0 })
+        Ok(Harness { renderer, h: H { shared, scene: Some(scene), shot: None }, steps: steps.into(), waiting: 0.0, since: 0.0 })
     });
     fail(format!("the window closed before the script finished: {:?}", result.err().map(|e| e.to_string())));
 }
@@ -356,6 +402,11 @@ impl Game for Harness {
     }
 
     fn update(&mut self, ctx: &mut Context, dt: f32) {
+        // `EUCHRE_PROOF_SPEED=4` runs the scene faster than real time (and the waits with it).
+        let dt = dt * std::env::var("EUCHRE_PROOF_SPEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0f32);
+        if let Some(path) = self.h.shot.take() {
+            ctx.graphics.capture_screenshot(path);
+        }
         self.h.shared.time += dt;
         self.renderer.update(&ctx.graphics, &ctx.window, self.h.shared.time);
         let mut scene = self.h.scene.take().unwrap();
@@ -747,6 +798,480 @@ fn clearing_your_name_goes_back_to_the_default() {
             act(|h| {
                 if !h.shared.settings.name.is_empty() {
                     fail(format!("an empty name is saved as the literal {:?}, so `player_name` never falls back to the Steam name again", h.shared.settings.name));
+                }
+            }),
+        ],
+    );
+}
+
+// ----------------------------------------------------------------------
+// The tutorial
+// ----------------------------------------------------------------------
+
+/// The state's fields: `kind|lesson|focus now|focus wanted|words`.
+fn fields(state: &str) -> Vec<String> {
+    state.split('|').map(String::from).collect()
+}
+
+/// Presses on through the tutorial with a controller, the way a player who knows
+/// what they're doing would. `shots` is where to save a picture of each new beat.
+/// Returns the steps up to the end of the match.
+fn walk_tutorial(alone: bool, shots: Option<String>) -> Step {
+    let mut seen: Vec<String> = Vec::new();
+    let mut cooldown = 0.0f32;
+    let mut count = 0;
+    let mut last = Instant::now();
+    // When a new moment was first seen, so it can settle before its picture.
+    let mut settling: Option<(String, Instant)> = None;
+    Step::Until(
+        "the tutorial to reach its end",
+        900.0,
+        Box::new(move |h: &mut H| {
+            cooldown -= last.elapsed().as_secs_f32();
+            last = Instant::now();
+            let state = h.state();
+            let f = fields(&state);
+            let (kind, words) = (f[0].as_str(), f.get(4).cloned().unwrap_or_default());
+            if kind == "report" {
+                return true;
+            }
+            let moment = format!("{kind}:{words}");
+            let new = !seen.contains(&moment);
+            if new && matches!(kind, "chapter" | "talk" | "task" | "quiz" | "bid" | "card" | "banner") {
+                let ready = !matches!(kind, "talk") || f[2] == "true";
+                if !ready {
+                    if cooldown <= 0.0 {
+                        h.nav(Nav::Confirm); // Finish typing.
+                        cooldown = 0.15;
+                    }
+                    return false;
+                }
+                if shots.is_some() {
+                    let since = match &settling {
+                        Some((m, at)) if *m == moment => at.elapsed().as_secs_f32(),
+                        _ => {
+                            settling = Some((moment.clone(), Instant::now()));
+                            0.0
+                        }
+                    };
+                    if since < 0.8 {
+                        return false;
+                    }
+                }
+                seen.push(moment.clone());
+                println!("[{}] {kind}: {words}", f[1]);
+                if let Some(dir) = &shots {
+                    count += 1;
+                    h.shot = Some(format!("{dir}/{count:03}_{kind}.png").into());
+                }
+                cooldown = cooldown.max(0.3);
+                return false;
+            }
+            if cooldown > 0.0 {
+                return false;
+            }
+            cooldown = 0.12;
+            match kind {
+                "chapter" | "talk" | "banner" => h.nav(Nav::Confirm),
+                "task" | "quiz" => {
+                    if f[2] == f[3] {
+                        h.nav(Nav::Confirm);
+                    } else {
+                        h.nav(Nav::Right);
+                    }
+                }
+                "bid" => {
+                    // The monster in lesson 4 goes alone. Otherwise, whatever has focus (usually PASS).
+                    if alone && f[1] == "3" && !words.contains("ALONE!") {
+                        h.nav(Nav::Alt);
+                        h.nav(Nav::Left);
+                        h.nav(Nav::Confirm);
+                    } else {
+                        h.nav(Nav::Confirm);
+                    }
+                }
+                "card" => h.nav(Nav::Confirm),
+                _ => {}
+            }
+            false
+        }),
+    )
+}
+
+/// The whole match with a controller: every lesson, every quiz, to the report at the end.
+fn tutorial_plays_through() {
+    let shots = std::env::var("EUCHRE_PROOF_SHOTS").ok();
+    if let Some(dir) = &shots {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    script(
+        |shared| Box::new(Table::tutorial(shared, 0, [0, 0])),
+        vec![
+            walk_tutorial(true, shots.clone()),
+            Step::Wait(0.9),
+            act(move |h| {
+                if let Some(dir) = &shots {
+                    h.shot = Some(format!("{dir}/999_report.png").into());
+                }
+            }),
+            Step::Wait(0.2),
+            act(|h| {
+                if !h.shared.settings.tutorial_done {
+                    fail("reaching the report should mark the tutorial as done");
+                }
+                if h.shared.settings.lesson.is_some() {
+                    fail("a finished tutorial shouldn't offer to pick it back up");
+                }
+            }),
+        ],
+    );
+}
+
+/// Waits for the coach to want a move of this `kind`, pressing on past anything else.
+fn until_kind(kind: &'static str) -> Step {
+    let mut cooldown = Instant::now();
+    Step::Until(
+        kind,
+        120.0,
+        Box::new(move |h: &mut H| {
+            let state = h.state();
+            let f = fields(&state);
+            if f[0] == kind {
+                return true;
+            }
+            if cooldown.elapsed().as_secs_f32() > 0.15 && matches!(f[0].as_str(), "chapter" | "talk" | "banner") {
+                cooldown = Instant::now();
+                h.nav(Nav::Confirm);
+            }
+            false
+        }),
+    )
+}
+
+/// Lesson 1 won't play the wrong thing. It says why, and the table doesn't move on.
+fn tutorial_wrong_answers_are_explained() {
+    let asked = Arc::new(Mutex::new(String::new()));
+    let (a, b) = (asked.clone(), asked.clone());
+    script(
+        |shared| Box::new(Table::tutorial(shared, 0, [0, 0])),
+        vec![
+            until_kind("task"),
+            act(move |h| *a.lock().unwrap() = fields(&h.state())[4].clone()),
+            // PASS, which is greyed out, then the keyboard's O is the right answer.
+            nav(Nav::Right),
+            nav(Nav::Confirm),
+            Step::Wait(0.2),
+            act(move |h| {
+                let f = fields(&h.state());
+                if f[0] != "task" {
+                    fail(format!("pressing the wrong bid moved the game on: {}", f[0]));
+                }
+                if f[4] == *b.lock().unwrap() {
+                    fail("pressing the wrong bid should get an explanation");
+                }
+            }),
+            act(|h| h.key(Key::O)),
+            // The next thing wanted is a card, and only one is legal; try a card that isn't.
+            until_kind("task"),
+            act(|h| {
+                let f = fields(&h.state());
+                if !f[4].contains("follow suit") {
+                    fail(format!("expected the follow suit lesson, got: {}", f[4]));
+                }
+            }),
+            nav(Nav::Right),
+            nav(Nav::Confirm),
+            Step::Wait(0.2),
+            snap("wrong_card"),
+            Step::Wait(0.1),
+            act(|h| {
+                let f = fields(&h.state());
+                if f[0] != "task" {
+                    fail("an illegal card moved the game on");
+                }
+                if !f[4].contains("follow") {
+                    fail(format!("an illegal card should be explained, got: {}", f[4]));
+                }
+            }),
+        ],
+    );
+}
+
+/// Clicks and taps press on, answer and play, and MENU still opens during a talk.
+fn tutorial_mouse_and_touch_work() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 0, [0, 0])),
+        vec![
+            Step::Wait(1.0),
+            Step::Until(
+                "the chapter card",
+                10.0,
+                Box::new(|h: &mut H| fields(&h.state())[0] == "chapter"),
+            ),
+            Step::Wait(0.4),
+            act(|h| h.click(vec2(320.0, 180.0))),
+            Step::Until("a talk", 5.0, Box::new(|h: &mut H| fields(&h.state())[0] == "talk")),
+            Step::Wait(0.3),
+            // MENU, on top of the talk.
+            act(|h| h.click(vec2(600.0, 340.0))),
+            Step::Wait(0.2),
+            act(|h| h.key(Key::Escape)),
+            Step::Wait(0.2),
+            act(|h| {
+                if fields(&h.state())[0] != "talk" {
+                    fail("opening and closing the menu shouldn't skip what Benny was saying");
+                }
+            }),
+            // A tap finishes the typing, the next one moves on.
+            act(|h| h.tap(vec2(320.0, 100.0))),
+            Step::Wait(0.2),
+            act(|h| h.tap(vec2(320.0, 100.0))),
+            Step::Until(
+                "the next line",
+                5.0,
+                Box::new(|h: &mut H| fields(&h.state()).get(4).is_some_and(|w| w.contains("team"))),
+            ),
+        ],
+    );
+}
+
+/// There's one save slot, and the tutorial mustn't touch it: not when it starts, not when you leave.
+fn tutorial_leaves_the_saved_game_alone() {
+    a_saved_game();
+    script(
+        |shared| Box::new(Table::tutorial(shared, 2, [2, 0])),
+        vec![
+            Step::Wait(1.5),
+            nav(Nav::Menu),
+            nav(Nav::Up), // RESUME wraps around to LEAVE LESSON.
+            nav(Nav::Confirm),
+            Step::Wait(0.2),
+            act(|_| {
+                if savegame::load().is_none_or(|m| m.id != 111) {
+                    fail("leaving a lesson changed the saved game");
+                }
+            }),
+        ],
+    );
+}
+
+/// Leaving at lesson 3 and coming back offers to carry on from there, with that score.
+fn tutorial_picks_up_where_you_left_off() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 2, [2, 0])),
+        vec![
+            Step::Until("the chapter card", 10.0, Box::new(|h: &mut H| fields(&h.state())[0] == "chapter")),
+            act(|h| {
+                if h.shared.settings.lesson != Some((2, [2, 0])) {
+                    fail(format!("lesson 3 at 2-0 should be remembered, got {:?}", h.shared.settings.lesson));
+                }
+            }),
+            act(|_| {
+                let saved = settings::Settings::load();
+                if saved.lesson != Some((2, [2, 0])) {
+                    fail(format!("the settings file should remember the lesson, got {:?}", saved.lesson));
+                }
+            }),
+        ],
+    );
+}
+
+/// Getting to the report is remembered in the settings file.
+fn tutorial_finishing_is_remembered() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 3, [4, 0])),
+        vec![
+            walk_tutorial(true, None),
+            Step::Wait(0.1),
+            act(|_| {
+                let saved = settings::Settings::load();
+                if !saved.tutorial_done || saved.lesson.is_some() {
+                    fail(format!("expected done and nothing to pick up, got {} and {:?}", saved.tutorial_done, saved.lesson));
+                }
+            }),
+        ],
+    );
+}
+
+/// With `EUCHRE_PROOF_SHOTS` set, saves a picture of this moment.
+fn snap(name: &'static str) -> Step {
+    act(move |h| {
+        if let Ok(dir) = std::env::var("EUCHRE_PROOF_SHOTS") {
+            std::fs::create_dir_all(&dir).unwrap();
+            h.shot = Some(format!("{dir}/{name}.png").into());
+        }
+    })
+}
+
+/// Wrong answers count against you, and losing the match still ends in the report.
+fn tutorial_can_be_lost() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 1, [0, 6])),
+        vec![
+            until_kind("task"),
+            // Lesson 2 wants a pass here.
+            act(|h| h.key(Key::O)),
+            Step::Wait(1.0),
+            snap("wrong_bid"),
+            Step::Wait(0.2),
+            act(|h| {
+                let f = fields(&h.state());
+                if f[0] != "task" || f[1] != "1" {
+                    fail(format!("a wrong bid should get a second chance, got {f:?}"));
+                }
+            }),
+            walk_tutorial(false, None),
+            Step::Wait(1.2),
+            snap("lost_report"),
+            Step::Wait(0.2),
+            act(|h| {
+                if !h.shared.settings.tutorial_done {
+                    fail("the report counts as finishing, even after losing");
+                }
+            }),
+        ],
+    );
+}
+
+/// Past the five lessons, hands are random and quiet until someone reaches the target.
+fn tutorial_runs_past_the_script() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 5, [6, 6])),
+        vec![
+            Step::Until("the chapter card", 10.0, Box::new(|h: &mut H| fields(&h.state())[0] == "chapter")),
+            Step::Wait(0.6),
+            snap("extra_chapter"),
+            Step::Wait(0.2),
+            act(|h| {
+                let f = fields(&h.state());
+                if !f[4].contains("ANYBODY") {
+                    fail(format!("expected the extra chapter, got: {}", f[4]));
+                }
+            }),
+            walk_tutorial(false, None),
+        ],
+    );
+}
+
+/// Presses LEARN TO PLAY on a title with no saved game.
+fn press_learn() -> Vec<Step> {
+    vec![nav(Nav::Down), nav(Nav::Down), nav(Nav::Confirm), Step::Wait(0.2)]
+}
+
+fn expect_lesson(lesson: &'static str, scores: [u32; 2]) -> Step {
+    Step::Until(
+        "the lesson's chapter card",
+        10.0,
+        Box::new(move |h: &mut H| {
+            let state = h.state();
+            let f = fields(&state);
+            if f[0] != "chapter" {
+                return false;
+            }
+            // The very start has nothing worth picking back up.
+            if f[1] != lesson || h.shared.settings.lesson.map_or([0, 0], |l| l.1) != scores {
+                fail(format!("expected lesson {lesson} at {scores:?}, got {state} and {:?}", h.shared.settings.lesson));
+            }
+            true
+        }),
+    )
+}
+
+fn title_learn_starts_the_first_lesson() {
+    let mut steps = press_learn();
+    steps.push(expect_lesson("0", [0, 0]));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+fn title_learn_picks_it_up() {
+    let mut steps = vec![act(|h| h.shared.settings.lesson = Some((2, [2, 1])))];
+    steps.extend(press_learn());
+    steps.push(Step::Wait(0.5));
+    steps.push(snap("welcome_back"));
+    steps.push(Step::Wait(0.2));
+    steps.push(nav(Nav::Confirm)); // PICK IT UP
+    steps.push(expect_lesson("2", [2, 1]));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+fn title_learn_starts_over() {
+    let mut steps = vec![act(|h| h.shared.settings.lesson = Some((2, [2, 1])))];
+    steps.extend(press_learn());
+    steps.push(nav(Nav::Right)); // PICK IT UP -> START OVER
+    steps.push(nav(Nav::Confirm));
+    steps.push(expect_lesson("0", [0, 0]));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+/// Backing out of the question touches nothing, and the menu works again.
+fn title_learn_question_backs_out() {
+    let mut steps = vec![act(|h| h.shared.settings.lesson = Some((2, [2, 1])))];
+    steps.extend(press_learn());
+    steps.push(nav(Nav::Back));
+    steps.push(Step::Wait(0.2));
+    steps.push(act(|h| {
+        if h.shared.settings.lesson != Some((2, [2, 1])) {
+            fail("backing out shouldn't forget the lesson");
+        }
+    }));
+    steps.push(nav(Nav::Confirm)); // Still on LEARN TO PLAY, so it asks again.
+    steps.push(nav(Nav::Confirm));
+    steps.push(expect_lesson("2", [2, 1]));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+/// Lesson 4: nothing says anything until you ask. HINT explains, and then the note goes away with your move.
+fn tutorial_hint_points_at_a_move() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 3, [4, 0])),
+        vec![
+            until_kind("bid"),
+            act(|h| {
+                if !fields(&h.state())[4].is_empty() {
+                    fail(format!("lesson 4 shouldn't say anything before you ask: {}", fields(&h.state())[4]));
+                }
+            }),
+            nav(Nav::Up),
+            nav(Nav::Confirm),
+            Step::Wait(0.3),
+            act(|h| {
+                let words = fields(&h.state())[4].clone();
+                if !words.contains("ALONE") {
+                    fail(format!("the hint on this hand should mention going alone, got: {words}"));
+                }
+            }),
+            act(|h| h.shot = std::env::var("EUCHRE_PROOF_SHOTS").ok().map(|d| format!("{d}/hint.png").into())),
+            Step::Wait(0.3),
+            // Back down to the bids, then pass. (The hint isn't an order.)
+            nav(Nav::Down),
+            act(|h| h.key(Key::P)),
+            Step::Until(
+                "the table to move on",
+                10.0,
+                Box::new(|h: &mut H| fields(&h.state())[4].is_empty()),
+            ),
+        ],
+    );
+}
+
+/// Lesson 5 has no tips, no HINT, and no notes on the table at all.
+fn tutorial_quiet_lessons_stay_quiet() {
+    script(
+        |shared| Box::new(Table::tutorial(shared, 4, [4, 0])),
+        vec![
+            until_kind("bid"),
+            act(|h| {
+                if !fields(&h.state())[4].is_empty() {
+                    fail("lesson 5 should be silent");
+                }
+            }),
+            nav(Nav::Up), // Nothing up there.
+            act(|h| h.key(Key::O)),
+            until_kind("card"),
+            act(|h| {
+                let f = fields(&h.state());
+                if !f[4].is_empty() {
+                    fail(format!("lesson 5 should be silent, got: {}", f[4]));
                 }
             }),
         ],

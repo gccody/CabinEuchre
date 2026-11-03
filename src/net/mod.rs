@@ -6,6 +6,7 @@
 //!
 //! - [`Link::Local`]: the room runs right here, with three bots (offline play).
 //! - [`Link::Online`]: the room is on the server, over a WebSocket (`online.rs`).
+//! - [`Link::Tutorial`]: the tutorial's scripted room, right here too.
 
 pub mod local;
 pub mod online;
@@ -15,6 +16,7 @@ use std::time::Duration;
 
 use crate::euchre::Match;
 use crate::euchre::protocol::{ClientMsg, ServerMsg};
+use crate::euchre::tutorial::TutorialRoom;
 
 pub use local::LocalTable;
 pub use online::{Connection, Status};
@@ -22,6 +24,7 @@ pub use online::{Connection, Status};
 pub enum Link {
     Local(Box<LocalTable>),
     Online(Connection),
+    Tutorial(Box<TutorialRoom>),
 }
 
 impl Link {
@@ -29,6 +32,7 @@ impl Link {
         match self {
             Link::Local(l) => l.send(msg),
             Link::Online(c) => c.send(msg),
+            Link::Tutorial(t) => t.handle(msg),
         }
     }
 
@@ -37,11 +41,17 @@ impl Link {
         match self {
             Link::Local(l) => l.poll(),
             Link::Online(c) => c.poll(),
+            Link::Tutorial(t) => t.poll(),
         }
     }
 
     pub fn is_online(&self) -> bool {
         matches!(self, Link::Online(_))
+    }
+
+    /// The tutorial's match: a coach at the table, and nothing to save.
+    pub fn is_tutorial(&self) -> bool {
+        matches!(self, Link::Tutorial(_))
     }
 
     /// Going back to a seat this player already held at this table.
@@ -53,13 +63,13 @@ impl Link {
     pub fn local_match(&self) -> Option<&Match> {
         match self {
             Link::Local(l) => l.game(),
-            Link::Online(_) => None,
+            Link::Online(_) | Link::Tutorial(_) => None,
         }
     }
 
     pub fn status(&self) -> Status {
         match self {
-            Link::Local(_) => Status::Connected,
+            Link::Local(_) | Link::Tutorial(_) => Status::Connected,
             Link::Online(c) => c.status(),
         }
     }
@@ -75,7 +85,7 @@ impl Link {
     /// The room code, for an online game.
     pub fn room_code(&self) -> Option<String> {
         match self {
-            Link::Local(_) => None,
+            Link::Local(_) | Link::Tutorial(_) => None,
             Link::Online(c) => c.room_code(),
         }
     }
@@ -83,7 +93,7 @@ impl Link {
     /// The room handle (what friends see instead of the code), for an online game.
     pub fn room_handle(&self) -> Option<String> {
         match self {
-            Link::Local(_) => None,
+            Link::Local(_) | Link::Tutorial(_) => None,
             Link::Online(c) => c.room_handle(),
         }
     }

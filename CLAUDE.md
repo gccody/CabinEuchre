@@ -7,8 +7,8 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
-game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted) and
-an illustrated How to Play. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
+game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted), an
+illustrated How to Play, and LEARN TO PLAY, a scripted match where Benny teaches you the game. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
 macOS and Linux, and on Android and iOS phones and tablets (see "Phones and tablets").
 
 **Online play** (cross-platform): host a table or join one with a 6-letter code; bots fill empty
@@ -57,6 +57,7 @@ the monitor's refresh rate.
 | `EUCHRE_FIXED_DT=n` | every frame advances exactly n/60 s (1 for screenshots, 4 to fast-forward soak runs) |
 | `EUCHRE_SCENE=table\|continue\|options\|rules` | start in a game, resume the saved game, or on the title with a panel open |
 | `EUCHRE_SCENE=online\|host\|code` | the PLAY ONLINE menu, hosting a new table right away, or the code keyboard (with "KQJ" typed). With any `EUCHRE_SCENE` (or autoplay) the lobby logs the table code and handle when you sit down, for `netcheck` |
+| `EUCHRE_SCENE=learn` | start the tutorial. `EUCHRE_LESSON=n` picks the lesson (from 0; 5 and up are the unscripted extra hands) and `EUCHRE_LESSON_SCORE=us-them` the score |
 | `EUCHRE_SERVER=ws://...` | the room server (also read at build time; debug builds default to `ws://127.0.0.1:8787`, i.e. `wrangler dev`, and release builds to the live server) |
 | `EUCHRE_SEED=n` | deterministic deal, AI think times and shuffles |
 | `EUCHRE_AUTOPLAY=1` | the AI also plays your seat (your prompt shows for 1.2 s first); results and game over auto-continue, and game overs are logged to stderr. In the lobby it deals 4 s after sitting down |
@@ -86,13 +87,14 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
 | `src/device.rs` | `mobile()`, which every phone and tablet branch goes through (always false on a desktop unless previewing), and `var()` for debug switches |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
-| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
+| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
-| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
+| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `Link::Tutorial` is a `TutorialRoom` (the lessons); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
 | `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). No-ops without it |
 | `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, private/public, seats, LET IN / NO, DEAL (host only), INVITE, LEAVE), waiting for the host after a knock. Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
+| `src/scenes/table/coach.rs`, `coach_draw.rs`, `lessons.rs` | the tutorial on top of the table: what happens when and what's allowed; Benny's note, chapter cards, glove and report; and everything he says |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
 | `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, tabletop background, lamplight present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
 | `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
@@ -140,6 +142,31 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   works out every card's place from the round (`settled_places`) and deals them back out. To
   screenshot a resume, point `APPDATA` at a scratch folder holding `CabinEuchre\savegame.txt` and use
   `EUCHRE_SCENE=continue` (screenshot mode exits without `Game::quit`, so it never saves).
+
+### How the tutorial works
+
+- **It's a real table with a coach on top** (`Table::tutorial`). The rules, the mirror and the drawing are the
+  ones the game uses. `core/src/tutorial.rs` is the room: it speaks the same messages, deals from a script, and
+  each bot follows a plan, the first planned move the rules allow, else `ai::choose`. So a player who leaves
+  the script still gets a fair game. Its tests walk every legal line through the free lessons.
+- **Help fades lesson by lesson** (`coach::Level`). Lesson 1 `Show`: points, and only that move works. 2 `Ask`: you
+  choose, wrong answers are explained and retried, the glove comes after 2 misses or 18 s, plus quizzes. 3 `Review`: any
+  legal move, with a tip before and a comment after (`euchre::advice`). 4 `Hint`: the HINT button only. 5 `Quiet`.
+  Past that the match keeps going on random deals until someone reaches `TARGET`.
+- **The script is a list of `Beat`s** in `lessons.rs`. Each waits for a `When` (`BeforeDeal`, `Dealt`, `Move(n)`,
+  `TrickEnd`, `TrickWon`, `HandDone`). `coach_gate` at the top of `drive()` opens them, and `Cue::Coach` holds the
+  timeline for the moments between hands. A `Talk` and a `Quiz` hold the table; a `Task` only gates your move
+  (`coach_allows_bid`, `coach_allows_card`). `Move(n)` counts every action of the hand, so changing a deal in
+  `tutorial.rs` can move them: tests in `lessons.rs` check the moves it asks for are legal and that every line fits its
+  note and the font.
+- **Beats don't talk over the table:** they wait for the trump toast, and in the explaining lessons a bot's move
+  gets `coach_let_it_land` first.
+- **Progress** is in the settings, not the save slot: `lesson=` (LEARN TO PLAY then asks PICK IT UP or START OVER) and
+  `tutorial_done=` (hides the title's NEW? tag). The tutorial never touches `savegame.txt`.
+- **Benny's sprites have their own small atlas** (`CardArt::coach_image`): growing the card atlas moves the cards'
+  sampling by a rounding error, and the PC screenshots stop matching.
+- `cargo test --test scene_checks -- tutorial` walks the lessons in a real window. To see them, set `EUCHRE_PROOF_SHOTS=dir` to save
+  a picture of every beat and `EUCHRE_PROOF_SPEED=3` to hurry up. With `EUCHRE_MOBILE` and friends, that covers the other layouts too.
 
 ### Online play
 
@@ -312,6 +339,8 @@ other game's) sprites, shaders, sounds or other files.
   `assets/music/theme.ogg` exists.
 
 ## Ideas for later
+
+- A "replay this lesson" list in the tutorial.
 
 - Public quick-match (an extra Durable Object as a queue), once enough people play online.
 - Verified identities (Steam auth tickets checked by the server) if rankings ever matter.

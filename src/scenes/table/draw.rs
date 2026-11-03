@@ -38,6 +38,18 @@ fn right_corner() -> Vec2 {
     vec2(b.x + b.w - render::VIEW_W as f32, b.y)
 }
 
+/// The score pad, where it is on the table.
+pub(super) fn pad_rect() -> Rect {
+    let c = left_corner();
+    Rect::new(PAD.x + c.x, PAD.y + c.y, PAD.w, PAD.h)
+}
+
+/// The trump medallion and the line under it.
+pub(super) fn medallion_rect() -> Rect {
+    let m = MEDALLION + right_corner();
+    Rect::new(m.x - 52.0, m.y - 30.0, 104.0, 76.0)
+}
+
 pub(super) fn pad_score_us() -> Vec2 {
     PAD_SCORE_US + left_corner()
 }
@@ -60,17 +72,27 @@ impl Table {
         self.draw_connection(shared, g);
         self.draw_plates(shared, g);
         self.draw_cards(shared, g);
-        self.draw_particles(g);
+        if self.coach.is_none() {
+            self.draw_particles(g);
+        }
         self.draw_bubbles(shared, g);
         self.draw_prompt(shared, g);
         self.draw_toast(shared, g);
+        self.draw_coach(shared, g);
+        if self.coach.is_some() {
+            self.draw_particles(g);
+        }
         g.pop();
 
         if let Some(b) = &self.banner {
             self.draw_banner(shared, g, b);
         }
         if self.game_over.is_some() {
-            self.draw_game_over(shared, g);
+            if self.coach.is_some() {
+                self.draw_report(shared, g);
+            } else {
+                self.draw_game_over(shared, g);
+            }
         }
         if let Some(p) = &self.pause {
             ui::dim_screen(g, 0.6);
@@ -156,6 +178,9 @@ impl Table {
             Prompt::Discard => self.game.round.hands[HUMAN].clone(),
             _ => Vec::new(),
         };
+        // The tutorial: what a quiz is asking about, and what Benny is pointing at.
+        let quiz = self.quiz_cards();
+        let glow = self.coach_glow();
         for id in order {
             let s = &self.sprites[id];
             let card = Card::from_id(id);
@@ -165,7 +190,7 @@ impl Table {
             let (sx, sy) = (scale * flip, scale * (1.0 + flip_arc * 0.06));
             let (x, y, rot) = (s.x.value, s.y.value - flip_arc * 6.0, s.rot.value);
             let face = (s.face >= 0.5).then_some(card);
-            let hovered = self.hover == Some(card) && self.places[id] == Place::Hand(HUMAN);
+            let hovered = self.hover == Some(card) && (self.places[id] == Place::Hand(HUMAN) || quiz.contains(&card));
             let height = if hovered { 3.0 } else { 0.0 } + flip_arc * 3.0;
 
             let pose = Pose::new(x, y, rot, sx, sy);
@@ -185,6 +210,13 @@ impl Table {
             if hovered && playable.contains(&card) {
                 let color = if self.prompt == Prompt::Discard { palette::RED } else { palette::GOLD };
                 outline(g, pose, color, 1.0);
+            }
+            if hovered && quiz.contains(&card) {
+                outline(g, pose, palette::GOLD, 1.0);
+            }
+            if glow.contains(&card) {
+                let pulse = 0.6 + 0.4 * (shared.time * 6.0).sin();
+                outline(g, pose, palette::GOLD.with_alpha(pulse), 2.0);
             }
         }
     }
@@ -463,7 +495,9 @@ impl Table {
         let font = &shared.font;
         let r = &self.game.round;
         let prompt_y = layout::prompt_y(!self.bids.is_empty());
-        if let Some((hint, t)) = &self.hint {
+        if self.coach.as_ref().is_some_and(|c| c.speaking()) {
+            // Benny's note says it instead.
+        } else if let Some((hint, t)) = &self.hint {
             let wob = (t * 30.0).sin() * (t - 1.9).max(0.0) * 6.0;
             draw_note(g, font, hint, layout::note_x() + wob, prompt_y, palette::SUIT_RED_LIGHT, 0.7);
         } else {

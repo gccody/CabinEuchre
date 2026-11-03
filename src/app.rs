@@ -141,6 +141,16 @@ impl App {
             // Launched from a friend's Steam invite or "Join Game".
             _ if let Some(request) = crate::platform::take_join_request() => Box::new(Lobby::from_request(&shared, request)),
             Some("table") => Box::new(Table::new(&shared)),
+            Some("learn") => {
+                let lesson = device::var("EUCHRE_LESSON").and_then(|l| l.parse().ok()).unwrap_or(0);
+                let scores = device::var("EUCHRE_LESSON_SCORE")
+                    .and_then(|s| {
+                        let (us, them) = s.split_once('-')?;
+                        Some([us.parse().ok()?, them.parse().ok()?])
+                    })
+                    .unwrap_or([0, 0]);
+                Box::new(Table::tutorial(&shared, lesson, scores))
+            }
             Some("online") => Box::new(Lobby::new(&shared)),
             Some("host") => Box::new(Lobby::host(&shared)),
             Some("code") => Box::new(Lobby::entering_code(&shared, "KQJ")),

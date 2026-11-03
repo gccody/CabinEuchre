@@ -67,6 +67,9 @@ pub const SUIT_RED_LIGHT: Color = Color::hex(0xff6f62);
 // Card art
 pub const SKIN: Color = Color::hex(0xf2c49b);
 pub const HAIR: Color = Color::hex(0x7a4a2a);
+/// Benny, the tutorial's coach: beard shadow and shaded skin.
+pub const HAIR_DARK: Color = Color::hex(0x55321c);
+pub const SKIN_SHADE: Color = Color::hex(0xd9a57e);
 pub const WHITE: Color = Color::hex(0xffffff);
 /// Card backs: a buffalo-check plaid.
 pub const BACK: Color = Color::hex(0xb9343c);

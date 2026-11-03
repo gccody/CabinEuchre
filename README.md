@@ -35,8 +35,17 @@ with a good, punchy sound. It's lively, it's cozy, and it's very hard to play ju
 - **Stick the dealer**, on or off
 - **Play to 5, 7 or 10**, and watch the points tick up on the score pad
 
-New to euchre? The illustrated **How to Play** walks you through it. Then Benny, your partner across
-the table, will help you take on Rosa and Jules.
+## Never played? Benny will teach you
+
+**Learn to Play** is a real match against Rosa and Jules with your partner Benny talking you through it.
+The first hand he points at every move. By the last one he keeps quiet and just watches, to see if
+you've got it. There's a hint if you get stuck, and a pop quiz or two. No walls of text.
+
+<p align="center">
+  <img src="docs/screenshots/pc-tutorial.png" alt="Benny's note on the table: Jules led a spade, so you must follow suit. A glove points at the nine of spades" width="820">
+</p>
+
+Prefer to read? The illustrated **How to Play** covers it all.
 
 <table>
   <tr>
