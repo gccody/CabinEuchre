@@ -66,6 +66,7 @@ the monitor's refresh rate.
 | `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |
 | `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units). A bottom of 24 is a gesture bar on screen, and the game centers above it |
 | `EUCHRE_RESERVE=n` | with `EUCHRE_MOBILE`, set aside n units at the bottom for a bar that isn't showing, as Android always does with 24 |
+| `EUCHRE_FOLD=left,right` | with `EUCHRE_MOBILE`, pretend a foldable is half open, with its fold between these window x positions |
 
 These only work in debug builds, except `EUCHRE_SERVER`, which any build reads. Nothing can set
 environment variables on a phone, so debug builds there also read `KEY=value` lines
@@ -239,6 +240,18 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   is correct, so this looks like the emulator's translator; not yet seen on a real device), so `pixel.wgsl` falls
   back to plain filtering and sprites look soft. Compare against Vulkan before blaming a change for blurry art.
 - Emulator notes: to reach a local `wrangler dev`, use `adb reverse tcp:8787 tcp:8787`.
+- **iPhone Duo.** Closed, the window is 678x466 with the outer camera in a corner; open, it's 951x669. Half open, iOS
+  reports the fold as a strip down the middle (`Window::reserved_regions`), and `render::fold()` gives it to the
+  layouts, eased so nothing snaps: the pile and trick split around it, your hand parts, the bid row breaks at its
+  nearest gap, and prompts and panels move to the right of it (`layout.rs`, `Table::follow_fold`). Options, How to
+  Play and the lobby aren't laid out around it yet. Preview with
+  `EUCHRE_MOBILE=1 EUCHRE_WINDOW=951x669 EUCHRE_SAFE=0,0,0,34 EUCHRE_FOLD=455.5,495.5 cargo run`.
+  Apple's `app-resizability` skill migrates Swift and Objective-C UIKit code, and this repo has none, so its tasks
+  apply to Love2DRS and its winit fork. It's gitignored because it's Apple's text: to get it, run
+  `xcrun agent skills export --output-dir DIR` (it exports every skill) and copy that folder to
+  `.claude/skills/app-resizability/`. iOS 27
+  ignores the `UIRequiresFullScreen` that `cargo love2drs` writes, so expect resizes. The Duo simulator needs an iOS 27
+  runtime (`xcodebuild -downloadPlatform iOS`).
 
 ### Rules of the road
 

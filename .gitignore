@@ -6,3 +6,6 @@ steam_appid.txt
 steam_api64.dll
 libsteam_api.so
 libsteam_api.dylib
+
+# Apple's Xcode skill: not ours to republish. See CLAUDE.md for how to export it.
+.claude/skills/app-resizability/

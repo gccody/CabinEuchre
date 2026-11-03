@@ -21,7 +21,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use love2drs::prelude::*;
-use love2drs::window::Window;
+use love2drs::window::{ReservedKind, ReservedRegion, Window};
 
 use crate::device;
 use crate::palette;
@@ -58,6 +58,52 @@ fn set_bounds(r: Rect) {
     for (slot, v) in BOUNDS.iter().zip([r.x, r.y, r.w, r.h]) {
         slot.store(v.to_bits(), Ordering::Relaxed);
     }
+}
+
+/// A fold running down the screen, in design space, while a foldable is partly open.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fold {
+    pub left: f32,
+    pub right: f32,
+    /// How far the layouts have moved out of its way, from 0 to 1, so nothing snaps.
+    pub amount: f32,
+}
+
+impl Fold {
+    pub fn center(&self) -> f32 {
+        (self.left + self.right) / 2.0
+    }
+
+    pub fn half_width(&self) -> f32 {
+        (self.right - self.left) / 2.0
+    }
+}
+
+/// `left`, `right` and `amount` of the fold; an `amount` of 0 means there isn't one.
+static FOLD: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+/// The fold the table should keep clear of. Only ever on a partly open foldable.
+pub fn fold() -> Option<Fold> {
+    if !device::mobile() {
+        return None;
+    }
+    let [left, right, amount] = [0, 1, 2].map(|i| f32::from_bits(FOLD[i].load(Ordering::Relaxed)));
+    (amount > 0.0).then_some(Fold { left, right, amount })
+}
+
+fn set_fold(fold: Option<Fold>) {
+    let Fold { left, right, amount } = fold.unwrap_or(Fold { left: 0.0, right: 0.0, amount: 0.0 });
+    for (slot, v) in FOLD.iter().zip([left, right, amount]) {
+        slot.store(v.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// The fold in `regions` as `(left, right)` in design space. The game is locked to
+/// landscape, so only a fold running down the screen divides it.
+fn fold_in(regions: &[ReservedRegion], view: &View) -> Option<(f32, f32)> {
+    let region = regions.iter().find(|r| r.kind == ReservedKind::Division && r.height >= r.width)?;
+    let design = |x: f32| (x - view.offset.x) / view.scale;
+    Some((design(region.x), design(region.x + region.width)))
 }
 
 /// Where the design space and canvas land in the window this frame.
@@ -173,6 +219,18 @@ fn preview_safe(window_w: f32, window_h: f32) -> (f32, f32, f32, f32) {
     }
 }
 
+/// Debug: `EUCHRE_FOLD=left,right` (window units) pretends a foldable is partly open
+/// when previewing the phone layouts on a desktop.
+fn preview_regions(window_h: f32) -> Vec<ReservedRegion> {
+    let edges: Vec<f32> = std::env::var("EUCHRE_FOLD")
+        .map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect())
+        .unwrap_or_default();
+    match edges[..] {
+        [left, right] => vec![ReservedRegion { kind: ReservedKind::Division, x: left, y: 0.0, width: right - left, height: window_h }],
+        _ => Vec::new(),
+    }
+}
+
 /// Where a phone's view sits, remembered from frame to frame.
 #[derive(Debug, Clone, Copy, Default)]
 struct Placement {
@@ -182,6 +240,9 @@ struct Placement {
     clear: Margins,
     /// The view's height in the window. `None` until there's a window to fit.
     y: Option<f32>,
+    /// The fold last seen, as `(left, right)`, and how far the layouts have moved for it.
+    fold: Option<(f32, f32)>,
+    fold_amount: f32,
 }
 
 impl Placement {
@@ -191,7 +252,7 @@ impl Placement {
         if self.window == window {
             self.clear = self.clear.at_least(margins);
         } else {
-            *self = Placement { window, clear: margins, y: None };
+            *self = Placement { window, clear: margins, ..Placement::default() };
         }
     }
 
@@ -203,6 +264,18 @@ impl Placement {
         };
         self.y = Some(y);
         y.floor()
+    }
+
+    /// Eases toward this frame's fold, and keeps the last one while easing away from it.
+    fn ease_fold(&mut self, seen: Option<(f32, f32)>, dt: f32) -> Option<Fold> {
+        self.fold = seen.or(self.fold);
+        let target = if seen.is_some() { 1.0 } else { 0.0 };
+        self.fold_amount = approach(self.fold_amount, target, 14.0, dt);
+        if (self.fold_amount - target).abs() < 0.002 {
+            self.fold_amount = target;
+        }
+        let (left, right) = self.fold?;
+        (self.fold_amount > 0.0).then_some(Fold { left, right, amount: self.fold_amount })
     }
 }
 
@@ -219,6 +292,8 @@ fn view_for(w: f32, h: f32, window: &Window, placement: &mut Placement, dt: f32)
     let y = placement.glide(View::safe_y(h, clear, scale), dt);
     let (view, bounds) = View::placed(w, h, reserved, scale, y);
     set_bounds(bounds);
+    let regions = if device::NATIVE_MOBILE { window.reserved_regions() } else { preview_regions(h) };
+    set_fold(placement.ease_fold(fold_in(&regions, &view), dt));
     view
 }
 
@@ -360,6 +435,33 @@ mod tests {
     fn the_size_stays_the_same_when_the_bar_appears() {
         let scale = View::safe_scale(W, H, Margins::default().at_least(RESERVED));
         assert_eq!(scale, View::safe_scale(W, H, RESERVED.at_least(RESERVED)));
+    }
+
+    #[test]
+    fn a_fold_down_the_screen_lands_in_design_space() {
+        let view = View { offset: vec2(0.0, 50.0), scale: 951.0 / 640.0, visible: DESIGN_RECT };
+        let region = |kind, width, height| ReservedRegion { kind, x: 455.5, y: 0.0, width, height };
+        let (left, right) = fold_in(&[region(ReservedKind::Division, 40.0, 669.0)], &view).unwrap();
+        assert!((left - 306.5).abs() < 0.1 && (right - 333.5).abs() < 0.1);
+        assert_eq!(fold_in(&[region(ReservedKind::Occlusion, 40.0, 40.0)], &view), None);
+        assert_eq!(fold_in(&[region(ReservedKind::Division, 669.0, 40.0)], &view), None);
+    }
+
+    #[test]
+    fn a_fold_eases_in_and_out_and_then_goes_away() {
+        let mut placement = Placement::default();
+        let eased = placement.ease_fold(Some((306.0, 334.0)), 0.016).unwrap();
+        assert!(eased.amount > 0.0 && eased.amount < 1.0);
+        for _ in 0..200 {
+            placement.ease_fold(Some((306.0, 334.0)), 0.016);
+        }
+        assert_eq!(placement.fold_amount, 1.0);
+        let leaving = placement.ease_fold(None, 0.016).unwrap();
+        assert!(leaving.amount > 0.0 && leaving.amount < 1.0 && leaving.left == 306.0);
+        for _ in 0..200 {
+            placement.ease_fold(None, 0.016);
+        }
+        assert_eq!(placement.ease_fold(None, 0.016), None);
     }
 
     #[test]

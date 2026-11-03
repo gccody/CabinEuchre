@@ -40,6 +40,79 @@ pub fn prompt_y(bidding: bool) -> f32 {
     }
 }
 
+/// Where things that would sit on the fold go instead, as an offset from the table's
+/// center: `folded` while the fold is fully in play, eased from nothing before that.
+fn past_fold(folded: impl Fn(render::Fold) -> f32) -> f32 {
+    render::fold().map_or(0.0, |f| (f.center() - CENTER.x + folded(f)) * f.amount)
+}
+
+/// Center of the pile: left of the fold, with the prompt to its right.
+pub fn pile_center() -> Vec2 {
+    CENTER + vec2(past_fold(|f| -(f.half_width() + CARD_W / 2.0 + 6.0)), 0.0)
+}
+
+/// How wide a line of the prompt can run before wrapping.
+pub fn prompt_max_width() -> f32 {
+    if render::fold().is_some() { 200.0 } else { f32::INFINITY }
+}
+
+/// Center of the prompt and other short notes: right of the fold, up to the east seat.
+pub fn note_x() -> f32 {
+    CENTER.x + past_fold(|f| f.half_width() + 104.0)
+}
+
+/// Center of the panels that open over the table: the whole space right of the fold.
+pub fn panel_x() -> f32 {
+    let right = render::bounds();
+    CENTER.x + past_fold(|f| (right.x + right.w - f.right) / 2.0 + f.half_width())
+}
+
+/// The widest panel that fits [`panel_x`], for one that would otherwise run to `wide`.
+pub fn panel_max_width(wide: f32) -> f32 {
+    if render::fold().is_some() { wide.min(300.0) } else { wide }
+}
+
+/// How far apart a phone's columns of menu buttons stand so the fold falls between them.
+pub fn column_gap(normal: f32) -> f32 {
+    render::fold().map_or(normal, |f| normal + ((f.right - f.left) - normal).max(0.0) * f.amount)
+}
+
+/// Left edges of a row of buttons above the hand: centered on the table, or with the
+/// fold between the two buttons nearest it.
+pub fn row_xs(widths: &[f32], gap: f32) -> Vec<f32> {
+    split_row(widths, gap, CENTER.x, render::fold())
+}
+
+fn split_row(widths: &[f32], gap: f32, center: f32, fold: Option<render::Fold>) -> Vec<f32> {
+    let total: f32 = widths.iter().sum::<f32>() + gap * (widths.len().max(1) - 1) as f32;
+    let mut x = (center - total / 2.0).round();
+    let mut plain = Vec::with_capacity(widths.len());
+    for w in widths {
+        plain.push(x);
+        x += w + gap;
+    }
+    let Some(f) = fold else { return plain };
+    // The gap nearest the fold becomes the split: buttons before it end at the
+    // fold's left edge, and the rest start at its right edge.
+    let split = (1..widths.len())
+        .min_by_key(|&i| (plain[i] - gap / 2.0 - f.center()).abs() as i32)
+        .unwrap_or(0);
+    let before: f32 = widths[..split].iter().map(|w| w + gap).sum();
+    let mut folded = f.left + gap - before;
+    plain
+        .iter()
+        .enumerate()
+        .map(|(i, &x)| {
+            if i == split {
+                folded = f.right;
+            }
+            let there = folded;
+            folded += widths[i] + gap;
+            (x + (there - x) * f.amount).round()
+        })
+        .collect()
+}
+
 /// The phone's table: x of the west and east seats, and the top and bottom of the safe area.
 fn mobile_edges() -> (f32, f32, f32, f32) {
     let b = render::bounds();
@@ -122,6 +195,18 @@ fn trick_offset(seat: Seat) -> Vec2 {
     [vec2(0.0, 32.0), vec2(-46.0, 3.0), vec2(0.0, -28.0), vec2(46.0, 3.0)][seat]
 }
 
+/// Where `seat` plays its card. A fold takes the middle away, so the seats that play
+/// there move aside, still going around clockwise: you and west on the left of it,
+/// your partner and east on the right.
+fn trick_spot(seat: Seat) -> Vec2 {
+    let plain = CENTER + trick_offset(seat);
+    let Some(f) = render::fold() else { return plain };
+    let near = f.half_width() + CARD_W / 2.0 + 1.0;
+    let far = near + 26.0;
+    let x = f.center() + [-near, -far, near, far][seat];
+    plain + vec2((x - plain.x) * f.amount, 0.0)
+}
+
 fn rotate(v: Vec2, a: f32) -> Vec2 {
     Vec2::from_angle(a).rotate(v)
 }
@@ -168,8 +253,16 @@ fn hand_slot(seat: Seat, i: usize, n: usize) -> (Vec2, f32, f32) {
     if human && device::mobile() {
         // Spread out, so each card shows enough to tap.
         let spacing = if n == 6 { 44.0 } else { 52.0 };
-        let local = vec2(k * spacing, k * k * 2.2);
-        return (hand_anchor(seat) + local, k * 0.035, MOBILE_HUMAN_SCALE);
+        let Some(f) = render::fold() else {
+            return (hand_anchor(seat) + vec2(k * spacing, k * k * 2.2), k * 0.035, MOBILE_HUMAN_SCALE);
+        };
+        // The fold falls between two cards: an odd hand moves over by half a card,
+        // and both sides spread until they clear it.
+        let k = if n % 2 == 1 { k + 0.5 * f.amount } else { k };
+        let clear = f.half_width() + CARD_W * MOBILE_HUMAN_SCALE / 2.0 + 1.0;
+        let spread = (clear - spacing / 2.0).max(0.0) * f.amount;
+        let x = k * spacing + spread.copysign(k) + (f.center() - CENTER.x) * f.amount;
+        return (hand_anchor(seat) + vec2(x, k * k * 2.2), k * 0.035, MOBILE_HUMAN_SCALE);
     }
     let spacing = match (human, n) {
         (true, 6) => 31.0,
@@ -250,7 +343,7 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
             Place::Pile => {
                 pile_i += 1.0;
                 Target {
-                    pos: CENTER + vec2(0.0, -pile_i * 0.35),
+                    pos: pile_center() + vec2(0.0, -pile_i * 0.35),
                     rot: jitter(card) * 0.4,
                     scale: 1.0,
                     face_up: false,
@@ -260,7 +353,7 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
                 }
             }
             Place::UpCard => Target {
-                pos: CENTER + vec2(5.0, -9.0),
+                pos: pile_center() + vec2(5.0, -9.0),
                 rot: -0.07,
                 scale: 1.0,
                 face_up: true,
@@ -271,7 +364,7 @@ pub fn targets(t: &Table, mouse: Vec2) -> Vec<Target> {
             Place::Trick(seat) => {
                 let glow = t.winner_glow.is_some_and(|(c, _)| c == card);
                 Target {
-                    pos: CENTER + trick_offset(seat),
+                    pos: trick_spot(seat),
                     rot: jitter(card),
                     scale: if glow { 1.1 } else { 1.0 },
                     face_up: true,
@@ -340,4 +433,34 @@ pub fn card_at(t: &Table, p: Vec2) -> Option<Card> {
         // A little extra reach upward so a lifted card stays hovered.
         (local.x.abs() <= hw && local.y >= -hh - 10.0 && local.y <= hh + below).then_some(card)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::Fold;
+
+    const WIDTHS: [f32; 3] = [124.0, 84.0, 96.0];
+    const FOLD: Fold = Fold { left: 306.5, right: 333.5, amount: 1.0 };
+
+    #[test]
+    fn a_row_stays_centered_without_a_fold() {
+        assert_eq!(split_row(&WIDTHS, 10.0, 320.0, None), vec![158.0, 292.0, 386.0]);
+    }
+
+    #[test]
+    fn no_button_touches_the_fold() {
+        for widths in [&WIDTHS[..], &[52.0, 52.0, 52.0, 84.0, 96.0][..]] {
+            let xs = split_row(widths, 10.0, 320.0, Some(FOLD));
+            for (x, w) in xs.iter().zip(widths) {
+                assert!(x + w <= FOLD.left + 1.0 || *x >= FOLD.right - 1.0, "{x} + {w} is on the fold");
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_only_starts_moving_as_the_fold_eases_in() {
+        let start = Fold { amount: 0.0, ..FOLD };
+        assert_eq!(split_row(&WIDTHS, 10.0, 320.0, Some(start)), split_row(&WIDTHS, 10.0, 320.0, None));
+    }
 }

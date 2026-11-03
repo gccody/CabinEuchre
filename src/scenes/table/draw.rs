@@ -14,7 +14,7 @@ use crate::net::Status;
 use crate::palette;
 use crate::render;
 use crate::scene::Shared;
-use crate::text::Text;
+use crate::text::{PixelFont, Text};
 use crate::ui::{self, Rect};
 
 /// The paper score pad in the top-left corner (before its slight tilt).
@@ -80,12 +80,13 @@ impl Table {
             let last = p.buttons.last().map_or(222.0, |(_, b)| b.rect.y + b.rect.h);
             let w = if device::mobile() {
                 // Two columns of buttons when there are many.
-                let left = p.buttons.iter().map(|(_, b)| b.rect.x).fold(CENTER.x, f32::min);
-                (CENTER.x - left) * 2.0 + 40.0
+                let (left, right) = button_span(p);
+                right - left + 40.0
             } else {
                 p.buttons.first().map_or(120.0, |(_, b)| b.rect.w) + 40.0
             };
-            let panel = Rect::new(CENTER.x - w / 2.0, first - 47.0, w, last - first + 68.0);
+            let center_x = if device::mobile() { (button_span(p).0 + button_span(p).1) / 2.0 } else { CENTER.x };
+            let panel = Rect::new(center_x - w / 2.0, first - 47.0, w, last - first + 68.0);
             let c = panel.center();
             g.translate(c.x, c.y);
             g.scale(p.pop.value, p.pop.value);
@@ -126,8 +127,9 @@ impl Table {
         };
         let w = font.width(&line) + 16.0;
         g.set_color(palette::INK.with_alpha(0.75));
-        ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), 86.0, w, 15.0, 3.0);
-        Text::new(&line, CENTER.x, 93.5).color(palette::GOLD).center().draw(g, font);
+        let x = layout::note_x();
+        ui::chamfer(g, Fill, (x - w / 2.0).round(), 86.0, w, 15.0, 3.0);
+        Text::new(&line, x, 93.5).color(palette::GOLD).center().draw(g, font);
     }
 
     fn draw_cards(&self, shared: &Shared, g: &mut Graphics) {
@@ -463,10 +465,7 @@ impl Table {
         let prompt_y = layout::prompt_y(!self.bids.is_empty());
         if let Some((hint, t)) = &self.hint {
             let wob = (t * 30.0).sin() * (t - 1.9).max(0.0) * 6.0;
-            let w = font.width(hint) + 16.0;
-            g.set_color(palette::INK.with_alpha(0.7));
-            ui::chamfer(g, Fill, (CENTER.x + wob - w / 2.0).round(), prompt_y - 7.0, w, 15.0, 3.0);
-            Text::new(hint, CENTER.x + wob, prompt_y).color(palette::SUIT_RED_LIGHT).center().draw(g, font);
+            draw_note(g, font, hint, layout::note_x() + wob, prompt_y, palette::SUIT_RED_LIGHT, 0.7);
         } else {
             let text = match self.prompt {
                 Prompt::OrderUp => {
@@ -509,10 +508,7 @@ impl Table {
             };
             if !text.is_empty() {
                 let bob = ((shared.time * 3.0).sin() * 0.6).round();
-                let w = font.width(&text) + 16.0;
-                g.set_color(palette::INK.with_alpha(0.6));
-                ui::chamfer(g, Fill, (CENTER.x - w / 2.0).round(), prompt_y - 7.0 + bob, w, 15.0, 3.0);
-                Text::new(&text, CENTER.x, prompt_y + bob).color(palette::CREAM).center().draw(g, font);
+                draw_note(g, font, &text, layout::note_x(), prompt_y + bob, palette::CREAM, 0.6);
             }
         }
         for (_, b) in &self.bids {
@@ -524,7 +520,7 @@ impl Table {
         let Some(t) = &self.toast else { return };
         let font = &shared.font;
         let fade = ((1.5 - t.age) / 0.3).clamp(0.0, 1.0);
-        let pos = CENTER + vec2(0.0, -2.0);
+        let pos = vec2(layout::note_x(), CENTER.y - 2.0);
         g.push();
         g.translate(pos.x, pos.y);
         g.scale(t.pop.value, t.pop.value);
@@ -570,7 +566,7 @@ impl Table {
         // Keep the score pad lit above the dim so the points visibly tick up.
         self.draw_scorepad(shared, g);
         g.push();
-        let c = CENTER + vec2(0.0, 8.0);
+        let c = vec2(layout::panel_x(), CENTER.y + 8.0);
         g.translate(c.x, c.y);
         g.scale(b.pop.value, b.pop.value);
         g.translate(-c.x, -c.y);
@@ -578,7 +574,7 @@ impl Table {
         let text_w = (font.width(b.title) * 2.5).max(font.width(&b.detail)).max(font.width(&b.points) * 1.5);
         // A phone's bigger button needs a taller panel.
         let h = if device::mobile() { 136.0 } else { 112.0 };
-        let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, 470.0), h);
+        let rect = Rect::centered(c.x, c.y, (text_w + 32.0).clamp(260.0, layout::panel_max_width(470.0)), h);
         ui::panel(g, rect, palette::PANEL);
         Text::new(b.title, c.x, rect.y + 23.0)
             .scale(2.5)
@@ -598,7 +594,7 @@ impl Table {
         let font = &shared.font;
         ui::dim_screen(g, (go.age * 2.0).min(1.0) * 0.55);
         g.push();
-        let c = vec2(CENTER.x, 180.0);
+        let c = vec2(layout::panel_x(), 180.0);
         g.translate(c.x, c.y);
         g.scale(go.pop.value, go.pop.value);
         g.translate(-c.x, -c.y);
@@ -634,6 +630,29 @@ impl Table {
         g.pop();
     }
 }
+
+/// The left and right edges of a phone's pause menu buttons.
+fn button_span(p: &super::Pause) -> (f32, f32) {
+    let left = p.buttons.iter().map(|(_, b)| b.rect.x).fold(f32::INFINITY, f32::min);
+    let right = p.buttons.iter().map(|(_, b)| b.rect.x + b.rect.w).fold(f32::NEG_INFINITY, f32::max);
+    (left, right)
+}
+
+/// A line of text on a dark plate, centered on `x`, wrapping upward from baseline `y`
+/// where a fold leaves less room.
+fn draw_note(g: &mut Graphics, font: &PixelFont, text: &str, x: f32, y: f32, color: Color, plate: f32) {
+    let lines = font.wrap(text, layout::prompt_max_width());
+    let top = y - NOTE_LINE * (lines.len() - 1) as f32;
+    let w = lines.iter().map(|line| font.line_width(line)).fold(0.0, f32::max) + 16.0;
+    g.set_color(palette::INK.with_alpha(plate));
+    ui::chamfer(g, Fill, (x - w / 2.0).round(), top - 7.0, w, 15.0 + y - top, 3.0);
+    for (i, line) in lines.iter().enumerate() {
+        Text::new(line, x, top + NOTE_LINE * i as f32).color(color).center().draw(g, font);
+    }
+}
+
+/// Between the lines of a wrapped note.
+const NOTE_LINE: f32 = 12.0;
 
 /// A rounded outline around a card drawn with the same transform as the card.
 fn outline(g: &mut Graphics, pose: Pose, color: Color, width: f32) {

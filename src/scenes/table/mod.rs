@@ -258,6 +258,8 @@ pub struct Table {
     toast: Option<Toast>,
     hint: Option<(String, f32)>,
     banner: Option<Banner>,
+    /// Whether a fold was in play last frame, to put things back when it goes.
+    was_folded: bool,
     game_over: Option<GameOver>,
     pause: Option<Pause>,
     overlay: Option<Overlay>,
@@ -409,6 +411,7 @@ impl Table {
             toast: None,
             hint: None,
             banner: None,
+            was_folded: false,
             game_over: None,
             pause: None,
             overlay: None,
@@ -1289,17 +1292,42 @@ impl Table {
             .position(|(k, b)| *k == Bid::Pass && b.enabled)
             .or_else(|| row.iter().position(|(_, b)| b.enabled))
             .unwrap_or(0);
-        // Center the row above the hand.
-        let gap = if mobile { 10.0 } else { 6.0 };
-        let total: f32 = row.iter().map(|(_, b)| b.rect.w).sum::<f32>() + gap * (row.len().max(1) - 1) as f32;
-        let mut x = (layout::CENTER.x - total / 2.0).round();
         for (_, b) in &mut row {
-            b.rect.x = x;
             let below_prompt = if mobile { 36.0 } else { 21.0 };
             b.rect.y = (layout::prompt_y(true) + below_prompt - b.rect.h / 2.0).round();
-            x += b.rect.w + gap;
         }
         self.bids = row;
+        self.place_bids();
+    }
+
+    /// Centers the bid buttons above the hand, on either side of a fold if there is one.
+    fn place_bids(&mut self) {
+        let gap = if device::mobile() { 10.0 } else { 6.0 };
+        let widths: Vec<f32> = self.bids.iter().map(|(_, b)| b.rect.w).collect();
+        for ((_, b), x) in self.bids.iter_mut().zip(layout::row_xs(&widths, gap)) {
+            b.rect.x = x;
+        }
+    }
+
+    /// Keeps the bid row and the panels clear of a fold as it comes and goes.
+    fn follow_fold(&mut self) {
+        let folded = crate::render::fold().is_some();
+        if !folded && !self.was_folded {
+            return;
+        }
+        self.was_folded = folded;
+        self.place_bids();
+        let x = layout::panel_x();
+        if let Some(banner) = &mut self.banner {
+            banner.button.rect.x = x - banner.button.rect.w / 2.0;
+        }
+        if let Some(over) = &mut self.game_over {
+            over.again.rect.x = x - 68.0 - over.again.rect.w / 2.0;
+            over.menu.rect.x = x + 68.0 - over.menu.rect.w / 2.0;
+        }
+        if let Some(p) = &mut self.pause {
+            place_pause_columns(&mut p.buttons);
+        }
     }
 
     fn click_bid(&mut self, bid: Bid, shared: &mut Shared) {
@@ -1405,10 +1433,8 @@ impl Table {
             for (i, (_, b)) in buttons.iter_mut().enumerate() {
                 b.text_scale = 1.2;
                 b.rect.y = top + (i / cols) as f32 * 46.0;
-                if cols == 2 {
-                    b.rect.x = cx + (i % 2) as f32 * (w + 10.0) - w - 5.0;
-                }
             }
+            place_pause_columns(&mut buttons);
             return buttons;
         }
         // A column centered on the table, 26 px apart.
@@ -1571,6 +1597,20 @@ impl Table {
     }
 }
 
+/// A phone's pause menu across: one column if it fits, clear of a fold, or two with
+/// the fold between them.
+fn place_pause_columns(buttons: &mut [(PauseChoice, Button)]) {
+    let two_columns = buttons.len() > 4;
+    let gap = layout::column_gap(10.0);
+    for (i, (_, b)) in buttons.iter_mut().enumerate() {
+        b.rect.x = if two_columns {
+            layout::CENTER.x + (i % 2) as f32 * (b.rect.w + gap) - b.rect.w - gap / 2.0
+        } else {
+            layout::panel_x() - b.rect.w / 2.0
+        };
+    }
+}
+
 /// The MENU button's place. On a phone it's a big one in the corner of the safe area.
 fn menu_button_rect(label: &str) -> Rect {
     if device::mobile() {
@@ -1612,6 +1652,7 @@ impl Scene for Table {
     fn update(&mut self, shared: &mut Shared, _ctx: &mut Context, dt: f32) -> Transition {
         self.delay = shared.settings.delay_factor();
         self.pump_link(shared);
+        self.follow_fold();
         if let Some(o) = &mut self.overlay {
             o.update(shared, dt);
         }
