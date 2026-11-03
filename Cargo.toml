@@ -36,6 +36,14 @@ steamworks = { version = "0.13", optional = true }
 [features]
 steam = ["dep:steamworks"]
 
+# Bug proofs that open real windows (see the file). Not part of a plain `cargo test`:
+# run them with `cargo test --test scene_bugs`.
+[[test]]
+name = "scene_bugs"
+path = "tests/scene_bugs.rs"
+harness = false
+test = false
+
 # Puts the icon and the name into the Windows .exe (see build.rs).
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

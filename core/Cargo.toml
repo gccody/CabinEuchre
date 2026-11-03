@@ -13,3 +13,10 @@ serde_json = "1"
 [dev-dependencies]
 # For `examples/netcheck.rs`, which plays a game against a running server.
 tungstenite = "0.30"
+
+# Proofs of known bugs, which fail until those are fixed:
+# run them with `cargo test -p euchre-core --test bug_proofs`.
+[[test]]
+name = "bug_proofs"
+path = "tests/bug_proofs.rs"
+test = false
