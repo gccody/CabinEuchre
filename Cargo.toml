@@ -2,7 +2,8 @@
 name = "cabin-euchre"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+# The `if let` match guard in app.rs. 1.92 can't build it; 1.95 is the oldest checked.
+rust-version = "1.95"
 description = "Cabin Euchre: euchre on a lamp-lit cabin table, with juicy pixel-art card-game feel."
 publish = false
 

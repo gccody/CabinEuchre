@@ -18,6 +18,10 @@
 //! - `platform` Steam (optional feature): names, invites, rich presence, join requests
 //! - `device`   phone or tablet? Picks the mobile layouts, and debug switches
 
+// A shipped Windows game opens a window, not a console behind it. Debug builds
+// keep the console for `eprintln!` and panics.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod assets;
 mod cards;

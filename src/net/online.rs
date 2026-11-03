@@ -7,7 +7,9 @@
 //! the whole hand (`Sync`), so the table simply lays it back out.
 //!
 //! The server address comes from `EUCHRE_SERVER` at run time, else at build
-//! time, else [`DEFAULT_SERVER`] (`wrangler dev` on this machine).
+//! time, else [`DEFAULT_SERVER`]: the live server in a release build, and
+//! `wrangler dev` on this machine otherwise. `build.rs` refuses a release build
+//! aimed anywhere a player couldn't reach.
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
@@ -23,7 +25,11 @@ use crate::euchre::protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg}
 use crate::net::seat_memory;
 
 /// Where `wrangler dev` serves the room server (see `server/README.md`).
-pub const DEFAULT_SERVER: &str = "ws://127.0.0.1:8787";
+const LOCAL_SERVER: &str = "ws://127.0.0.1:8787";
+/// The deployed room server.
+const LIVE_SERVER: &str = "wss://euchre.gccody2010.workers.dev";
+/// Where a game connects when nothing says otherwise.
+pub const DEFAULT_SERVER: &str = if cfg!(debug_assertions) { LOCAL_SERVER } else { LIVE_SERVER };
 
 /// The room server's base URL (`ws://` or `wss://`, no trailing slash).
 pub fn server_url() -> String {
