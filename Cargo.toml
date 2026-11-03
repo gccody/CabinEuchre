@@ -37,11 +37,11 @@ steamworks = { version = "0.13", optional = true }
 [features]
 steam = ["dep:steamworks"]
 
-# Bug proofs that open real windows (see the file). Not part of a plain `cargo test`:
-# run them with `cargo test --test scene_bugs`.
+# Checks that open real windows (see the file). Not part of a plain `cargo test`:
+# run them with `cargo test --test scene_checks`.
 [[test]]
-name = "scene_bugs"
-path = "tests/scene_bugs.rs"
+name = "scene_checks"
+path = "tests/scene_checks.rs"
 harness = false
 test = false
 

@@ -1,17 +1,21 @@
-//! Bug proofs that need the real game: the actual Lobby, Table and Title scenes,
-//! the real network client, a real window and GPU. Not part of `cargo test`, since
-//! it opens windows and every proof FAILS while its bug is there:
+//! Checks that need the real game: the actual Lobby, Table and Title scenes, the
+//! real network client, a real window and GPU. Not part of a plain `cargo test`,
+//! since it opens windows:
 //!
 //! ```sh
-//! cargo test --test scene_bugs                  # every proof, each in its own process
-//! cargo test --test scene_bugs -- pause_focus   # only proofs with this in their name
+//! cargo test --test scene_checks                  # every check, each in its own process
+//! cargo test --test scene_checks -- pause_focus   # only checks with this in their name
 //! ```
 //!
-//! Each proof asserts the CORRECT behaviour. "REPRODUCED" means the bug is real.
-//! Each runs with its own empty config folder, so it never touches your real
-//! settings, saved game or remembered seat. Proofs that need the room server
+//! Each started as the proof of a bug found before the first release, and asserts the
+//! correct behaviour. Each runs with its own empty config folder, so it never touches
+//! your real settings, saved game or remembered seat. Checks that need the room server
 //! expect `cd server && npx wrangler dev` on ws://127.0.0.1:8787 and say SKIPPED
 //! without it.
+//!
+//! `shot_*` aren't checks: they set a scene up for a screenshot, for screens no
+//! `EUCHRE_SCENE` reaches. `EUCHRE_WINDOW` and `EUCHRE_MOBILE` work as in the game:
+//! `LOVE2DRS_SCREENSHOT=x.png LOVE2DRS_SCREENSHOT_FRAME=30 <test exe> --proof shot_guest_lobby`
 
 #![allow(dead_code, unused_imports, unused_variables)]
 
@@ -81,10 +85,17 @@ fn real_server() -> String {
 }
 
 // ----------------------------------------------------------------------
-// Running the proofs
+// Running the checks
 // ----------------------------------------------------------------------
 
 const PROOFS: &[(&str, fn())] = &[
+    ("guest_cant_deal_from_the_lobby", guest_cant_deal_from_the_lobby),
+    ("host_can_deal_from_the_lobby", host_can_deal_from_the_lobby),
+    ("confirmed_new_game_starts_fresh", confirmed_new_game_starts_fresh),
+    ("helper_second_window", helper_second_window),
+    ("shot_new_game_dialog", shot_new_game_dialog),
+    ("shot_guest_lobby", shot_guest_lobby),
+    ("shot_guest_lobby_mid_game", shot_guest_lobby_mid_game),
     ("cancel_connecting_keeps_remembered_seat", cancel_connecting_keeps_remembered_seat),
     ("cancelling_a_rejoin_keeps_the_seat", cancelling_a_rejoin_keeps_the_seat),
     ("pause_focus_shift_doesnt_make_table_public", pause_focus_shift_doesnt_make_table_public),
@@ -115,8 +126,9 @@ fn main() {
     }
     let filter: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
     let exe = std::env::current_exe().unwrap();
-    let mut reproduced = 0;
-    for (name, _) in PROOFS.iter().filter(|(n, _)| filter.is_empty() || filter.iter().any(|f| n.contains(f.as_str()))) {
+    let mut failed = 0;
+    let wanted = |n: &str| !n.starts_with("helper_") && !n.starts_with("shot_") && (filter.is_empty() || filter.iter().any(|f| n.contains(f.as_str())));
+    for (name, _) in PROOFS.iter().filter(|(n, _)| wanted(n)) {
         let dir = std::env::temp_dir().join(format!("euchre-proof-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -128,25 +140,25 @@ fn main() {
             .output()
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        let line = text.lines().rfind(|l| l.starts_with("BUG:") || l.starts_with("PANIC:") || l.starts_with("OK") || l.starts_with("SKIP:") || l.starts_with("(setup")).unwrap_or("(no result)");
+        let line = text.lines().rfind(|l| l.starts_with("FAILED:") || l.starts_with("PANIC:") || l.starts_with("OK") || l.starts_with("SKIP:") || l.starts_with("(setup")).unwrap_or("(no result)");
         let verdict = match out.status.code() {
-            Some(0) => "not reproduced",
+            Some(0) => "ok",
             Some(77) => "SKIPPED",
             Some(2) => "SETUP FAILED",
             _ => {
-                reproduced += 1;
-                "REPRODUCED"
+                failed += 1;
+                "FAILED"
             }
         };
         println!("{verdict:<15} {name}\n                {line}");
         let _ = std::fs::remove_dir_all(&dir);
     }
-    println!("\n{reproduced} bug(s) reproduced");
-    std::process::exit(if reproduced > 0 { 1 } else { 0 });
+    println!("\n{failed} failed");
+    std::process::exit(if failed > 0 { 1 } else { 0 });
 }
 
-fn bug(msg: impl std::fmt::Display) -> ! {
-    println!("BUG: {msg}");
+fn fail(msg: impl std::fmt::Display) -> ! {
+    println!("FAILED: {msg}");
     std::process::exit(1);
 }
 
@@ -299,6 +311,7 @@ impl H {
 }
 
 struct Harness {
+    renderer: render::Renderer,
     h: H,
     steps: VecDeque<Step>,
     waiting: f32,
@@ -306,7 +319,14 @@ struct Harness {
 }
 
 fn script(make_scene: impl FnOnce(&Shared) -> Box<dyn Scene> + 'static, steps: Vec<Step>) -> ! {
-    let conf = love2drs::Conf::new("Cabin Euchre bug proof").size(640, 360);
+    let (w, h) = std::env::var("EUCHRE_WINDOW")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((640, 360));
+    let conf = love2drs::Conf::new("Cabin Euchre check").size(w, h);
     let result = love2drs::run(conf, move |ctx: &mut Context| {
         let shared = Shared {
             font: text::PixelFont::new(&ctx.graphics),
@@ -321,13 +341,22 @@ fn script(make_scene: impl FnOnce(&Shared) -> Box<dyn Scene> + 'static, steps: V
         };
         ctx.audio.set_volume(0.0);
         let scene = make_scene(&shared);
-        Ok(Harness { h: H { shared, scene: Some(scene) }, steps: steps.into(), waiting: 0.0, since: 0.0 })
+        let renderer = render::Renderer::new(&mut ctx.graphics, &ctx.window)?;
+        Ok(Harness { renderer, h: H { shared, scene: Some(scene) }, steps: steps.into(), waiting: 0.0, since: 0.0 })
     });
-    bug(format!("the window closed before the script finished: {:?}", result.err().map(|e| e.to_string())));
+    fail(format!("the window closed before the script finished: {:?}", result.err().map(|e| e.to_string())));
 }
 
 impl Game for Harness {
+    fn draw(&mut self, ctx: &mut Context) {
+        let scene = self.h.scene.as_mut().unwrap();
+        let shared = &self.h.shared;
+        self.renderer.frame(&mut ctx.graphics, |g| scene.draw(shared, g));
+    }
+
     fn update(&mut self, ctx: &mut Context, dt: f32) {
+        self.h.shared.time += dt;
+        self.renderer.update(&ctx.graphics, &ctx.window, self.h.shared.time);
         let mut scene = self.h.scene.take().unwrap();
         let t = scene.update(&mut self.h.shared, ctx, dt);
         self.h.scene = Some(scene);
@@ -372,6 +401,30 @@ fn nav(n: Nav) -> Step {
     act(move |h| h.nav(n))
 }
 
+/// A seat at a table where the game hasn't started, with the host somewhere.
+fn seated(host: Option<usize>, playing: bool) -> ServerMsg {
+    let mut seated = seats(host, SeatKind::Human);
+    if let ServerMsg::Seats(s) = &mut seated {
+        s.playing = playing;
+    }
+    seated
+}
+
+/// The lobby, sitting at a table the fake server runs.
+fn in_lobby(fake: &Fake, seats: ServerMsg, then: Vec<Step>) -> ! {
+    let f = fake.clone();
+    let mut steps = vec![
+        act(move |_| {
+            f.send(welcome());
+            f.send(seats);
+        }),
+        Step::Until("seat remembered", 5.0, Box::new(|_| seat_memory::code().is_some())),
+        Step::Wait(0.2),
+    ];
+    steps.extend(then);
+    script(|shared| Box::new(Lobby::host(shared)), steps)
+}
+
 fn remember_seat(code: &str, token: &str) {
     let dir = settings::config_dir().unwrap();
     std::fs::create_dir_all(&dir).unwrap();
@@ -409,6 +462,91 @@ fn online_table(fake: &Fake, greeting: Vec<ServerMsg>) -> Box<dyn FnOnce(&Shared
 // Proofs
 // ----------------------------------------------------------------------
 
+/// Only the host deals. A guest has no DEAL, and no key or button sends one.
+fn guest_cant_deal_from_the_lobby() {
+    let fake = Fake::start();
+    let g = fake.clone();
+    in_lobby(
+        &fake,
+        seated(Some(1), false),
+        vec![
+            nav(Nav::Menu),
+            nav(Nav::Confirm),
+            Step::Wait(0.4),
+            act(move |_| {
+                if g.got().iter().any(|m| matches!(m, ClientMsg::Start)) {
+                    fail("a guest sent Start from the lobby");
+                }
+            }),
+        ],
+    );
+}
+
+fn host_can_deal_from_the_lobby() {
+    let fake = Fake::start();
+    let g = fake.clone();
+    in_lobby(
+        &fake,
+        seated(Some(0), false),
+        vec![
+            nav(Nav::Confirm),
+            Step::Wait(0.4),
+            act(move |_| {
+                if !g.got().iter().any(|m| matches!(m, ClientMsg::Start)) {
+                    fail("the focus should start on DEAL, and pressing it should send Start");
+                }
+            }),
+        ],
+    );
+}
+
+fn shot_guest_lobby() {
+    let fake = Fake::start();
+    in_lobby(&fake, seated(Some(1), false), vec![Step::Wait(1000.0)]);
+}
+
+fn shot_guest_lobby_mid_game() {
+    let fake = Fake::start();
+    in_lobby(&fake, seated(Some(1), true), vec![Step::Wait(1000.0)]);
+}
+
+/// A game worth keeping is in the save slot, and this shows the question NEW GAME asks.
+fn a_saved_game() {
+    let mut old = Match::new(10, true, 111);
+    old.scores = [8, 9];
+    savegame::write(&old);
+    assert!(savegame::load().is_some_and(|m| m.id == 111));
+}
+
+fn shot_new_game_dialog() {
+    a_saved_game();
+    script(|_| Box::new(Title::new()), vec![nav(Nav::Down), nav(Nav::Confirm), Step::Wait(1000.0)]);
+}
+
+/// Saying yes to the question really does start a new game.
+fn confirmed_new_game_starts_fresh() {
+    a_saved_game();
+    script(
+        |_| Box::new(Title::new()),
+        vec![
+            nav(Nav::Down), // CONTINUE -> NEW GAME
+            nav(Nav::Confirm),
+            nav(Nav::Right), // KEEP MY GAME -> NEW GAME
+            nav(Nav::Confirm),
+            Step::Wait(0.2),
+            nav(Nav::Menu),
+            nav(Nav::Up), // RESUME wraps around to SAVE & QUIT
+            nav(Nav::Confirm),
+            Step::Wait(0.1),
+            act(|_| {
+                if savegame::load().is_none_or(|m| m.id == 111) {
+                    fail("NEW GAME, then yes, then SAVE & QUIT should have saved the new game");
+                }
+            }),
+        ],
+    );
+}
+
 /// REJOIN TABLE is offered. You press HOST A TABLE, then change your mind and press CANCEL
 /// before it connects. You never left the first table, so REJOIN should still be there.
 fn cancel_connecting_keeps_remembered_seat() {
@@ -423,7 +561,7 @@ fn cancel_connecting_keeps_remembered_seat() {
             nav(Nav::Back), // CANCEL
             act(|_| match seat_memory::code() {
                 Some(c) if c == "KQJTAB" => {}
-                _ => bug("CANCEL on a different table erased the remembered seat at KQJTAB: REJOIN is gone and the token is lost"),
+                _ => fail("CANCEL on a different table erased the remembered seat at KQJTAB: REJOIN is gone and the token is lost"),
             }),
         ],
     );
@@ -432,7 +570,8 @@ fn cancel_connecting_keeps_remembered_seat() {
 /// You press REJOIN TABLE and then CANCEL while it's connecting. Cancelling a reconnect
 /// shouldn't give the seat up: nothing has happened yet from the player's point of view.
 fn cancelling_a_rejoin_keeps_the_seat() {
-    let _fake = Fake::start();
+    let fake = Fake::start();
+    let g = fake.clone();
     remember_seat("KQJTAB", "my-token");
     script(
         |shared| Box::new(Lobby::new(shared)),
@@ -442,7 +581,13 @@ fn cancelling_a_rejoin_keeps_the_seat() {
             nav(Nav::Back), // CANCEL
             act(|_| {
                 if seat_memory::code().is_none() {
-                    bug("CANCEL during REJOIN sent Leave and forgot the token, so the seat is given up for good");
+                    fail("CANCEL during REJOIN forgot the token, so the seat is given up for good");
+                }
+            }),
+            Step::Wait(0.5),
+            act(move |_| {
+                if g.got().iter().any(|m| matches!(m, ClientMsg::Leave)) {
+                    fail("CANCEL during REJOIN told the room to give the seat away");
                 }
             }),
         ],
@@ -468,7 +613,7 @@ fn pause_focus_shift_doesnt_make_table_public() {
             Step::Wait(0.4),
             act(move |_| {
                 if g.got().iter().any(|m| matches!(m, ClientMsg::SetPublic { public: true })) {
-                    bug("the focus stayed on the same index when the menu rebuilt: pressing A on LET CY IN sent SetPublic{true}");
+                    fail("the focus stayed on the same index when the menu rebuilt: pressing A on LET CY IN sent SetPublic{true}");
                 }
             }),
         ],
@@ -495,7 +640,7 @@ fn pause_focus_shift_doesnt_refuse_a_friend() {
             Step::Wait(0.4),
             act(move |_| {
                 if g.got().iter().any(|m| matches!(m, ClientMsg::Answer { id: 7, accept: false })) {
-                    bug("the focus stayed on the same index when the menu rebuilt: pressing A on OPTIONS sent Answer{accept:false}");
+                    fail("the focus stayed on the same index when the menu rebuilt: pressing A on OPTIONS sent Answer{accept:false}");
                 }
             }),
         ],
@@ -518,7 +663,7 @@ fn seat_update_right_after_the_deal_is_applied() {
             Step::Wait(0.4),
             act(move |_| {
                 if !g.got().iter().any(|m| matches!(m, ClientMsg::SetPublic { .. })) {
-                    bug("Table::join left the Seats message after the deal in `pending`, where next_from_room drops it: the table still thinks the old seats are right");
+                    fail("Table::join left the Seats message after the deal in `pending`, where next_from_room drops it: the table still thinks the old seats are right");
                 }
             }),
         ],
@@ -553,7 +698,7 @@ fn closing_from_the_lobby_forgets_the_seat() {
             act(move |_| {
                 let left = g.got().iter().any(|m| matches!(m, ClientMsg::Leave));
                 if left && seat_memory::code().is_some() {
-                    bug("Lobby::suspend sent Leave but kept online_seat.txt: the next launch offers REJOIN TABLE for a seat already given up (Table::suspend does forget it)");
+                    fail("Lobby::suspend sent Leave but kept online_seat.txt: the next launch offers REJOIN TABLE for a seat already given up (Table::suspend does forget it)");
                 }
             }),
         ],
@@ -564,28 +709,21 @@ fn closing_from_the_lobby_forgets_the_seat() {
 /// stray click can't lose it". A stray click on NEW GAME, then the only way back to the title:
 /// MENU, SAVE & QUIT. The game you meant to keep should survive that.
 fn new_game_keeps_the_earlier_save() {
-    let mut old = Match::new(10, true, 111);
-    // A game worth keeping.
-    old.scores = [8, 9];
-    savegame::write(&old);
-    assert!(savegame::load().is_some_and(|m| m.id == 111));
+    a_saved_game();
     script(
         |_| Box::new(Title::new()),
         vec![
             nav(Nav::Down), // CONTINUE -> NEW GAME
             nav(Nav::Confirm),
+            nav(Nav::Confirm), // A double press lands on KEEP MY GAME.
             Step::Wait(0.2),
-            nav(Nav::Menu),
-            nav(Nav::Up), // RESUME wraps around to SAVE & QUIT
-            nav(Nav::Confirm),
-            Step::Wait(0.1),
             act(|_| match savegame::load() {
                 Some(m) if m.id == 111 => {}
-                Some(m) => bug(format!(
+                Some(m) => fail(format!(
                     "the saved game at 8-9 was overwritten by a {}-{} game that was only opened by mistake, without asking",
                     m.scores[0], m.scores[1]
                 )),
-                None => bug("the saved game is gone"),
+                None => fail("the saved game is gone"),
             }),
         ],
     );
@@ -594,12 +732,24 @@ fn new_game_keeps_the_earlier_save() {
 /// settings.rs: "Your name at online tables (empty: the Steam name, else PLAYER)". Clearing the
 /// name field and pressing DONE should mean "no name of my own" and bring the store's name back.
 fn clearing_your_name_goes_back_to_the_default() {
-    let cleaned = euchre::protocol::clean_name("");
-    let mut s = settings::Settings::default();
-    s.name = cleaned; // What lobby.rs does on DONE: `shared.settings.name = clean_name(&self.entry)`.
-    if !s.name.is_empty() {
-        bug(format!("an empty name is saved as the literal {:?}, so `player_name` never falls back to the Steam name again", s.name));
-    }
+    script(
+        |shared| Box::new(Lobby::new(shared)),
+        vec![
+            act(|h| h.shared.settings.name = "BOB".into()),
+            nav(Nav::Down), // HOST -> JOIN
+            nav(Nav::Down), // -> CHANGE NAME
+            nav(Nav::Confirm),
+            nav(Nav::Back), // Erases one letter at a time.
+            nav(Nav::Back),
+            nav(Nav::Back),
+            nav(Nav::Confirm), // The focus starts on DONE.
+            act(|h| {
+                if !h.shared.settings.name.is_empty() {
+                    fail(format!("an empty name is saved as the literal {:?}, so `player_name` never falls back to the Steam name again", h.shared.settings.name));
+                }
+            }),
+        ],
+    );
 }
 
 fn wait_for_welcome(c: &mut Connection) -> Option<(String, String)> {
@@ -626,26 +776,64 @@ fn second_window_doesnt_steal_the_seat() {
     let mut first = Connection::open(Join::Create, "FIRST", "?target=10&stick=1");
     let (code, token) = wait_for_welcome(&mut first).expect("the first player gets a seat");
     assert_eq!(seat_memory::code().as_deref(), Some(code.as_str()));
-    let mut second = Connection::open(Join::Code(code), "SECOND", "");
-    let (_, second_token) = wait_for_welcome(&mut second).expect("the second player gets a seat");
-    if second_token == token {
-        // Now see whether they fight over it.
-        let mut takeovers = 0;
-        let until = Instant::now() + Duration::from_secs(14);
-        while Instant::now() < until {
-            for c in [&mut first, &mut second] {
-                while let Some(m) = c.poll() {
-                    if matches!(m, ServerMsg::Welcome { .. }) {
-                        takeovers += 1;
-                    }
-                }
+    let second = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--proof", "helper_second_window"])
+        .env("EUCHRE_PROOF_CODE", &code)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Meanwhile, see whether anything takes the seat from us.
+    let mut takeovers = 0;
+    let until = Instant::now() + Duration::from_secs(14);
+    while Instant::now() < until {
+        while let Some(m) = first.poll() {
+            if matches!(m, ServerMsg::Welcome { .. }) {
+                takeovers += 1;
             }
-            std::thread::sleep(Duration::from_millis(20));
         }
-        bug(format!(
-            "the second window reused the first window's seat token, then the two took the seat from each other {takeovers} times in 14 s (they never stop)"
-        ));
+        std::thread::sleep(Duration::from_millis(20));
     }
+    let out = second.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let Some(line) = text.lines().find(|l| l.starts_with("SECOND ")) else {
+        println!("(setup problem) the second window said: {text}");
+        std::process::exit(2);
+    };
+    let mut words = line.split_whitespace().skip(1);
+    let (second_token, second_takeovers) = (words.next().unwrap(), words.next().unwrap());
+    if second_token == token {
+        fail("the second window reused the first window's seat token");
+    }
+    if takeovers != 0 || second_takeovers != "0" {
+        fail(format!("the windows took seats from each other: {takeovers} and {second_takeovers} times in 14 s"));
+    }
+    if first.status() != Status::Connected {
+        fail(format!("the first window ended up {:?}", first.status()));
+    }
+}
+
+/// The other copy of the game, in a process of its own like the real thing: `seat_memory`
+/// tells copies apart by a file lock, and a process doesn't conflict with itself.
+fn helper_second_window() {
+    use_server(&real_server());
+    let code = std::env::var("EUCHRE_PROOF_CODE").unwrap();
+    if seat_memory::code().is_some() {
+        fail("the second window was offered the first window's REJOIN TABLE");
+    }
+    let mut c = Connection::open(Join::Code(code), "SECOND", "");
+    let (_, token) = wait_for_welcome(&mut c).expect("the second player gets a seat");
+    let mut takeovers = 0;
+    let until = Instant::now() + Duration::from_secs(12);
+    while Instant::now() < until {
+        while let Some(m) = c.poll() {
+            if matches!(m, ServerMsg::Welcome { .. }) {
+                takeovers += 1;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    println!("SECOND {token} {takeovers}");
+    drop(c);
 }
 
 /// The server closes a connection with 4001 "Replaced by a newer connection" when the same token
@@ -673,7 +861,7 @@ fn a_replaced_connection_stays_closed() {
     }
     let n = *connections.lock().unwrap();
     if n > 1 {
-        bug(format!("after close code 4001 the client connected again {} more time(s) in 6 s, so it takes the seat back from the newer connection", n - 1));
+        fail(format!("after close code 4001 the client connected again {} more time(s) in 6 s, so it takes the seat back from the newer connection", n - 1));
     }
 }
 
@@ -690,9 +878,11 @@ fn leaving_while_reconnecting_still_leaves() {
         for stream in listener.incoming().flatten() {
             let Ok(mut ws) = tungstenite::accept(stream) else { continue };
             if first {
-                // Takes the hello, then the network "drops".
+                // Seats us, then the network "drops".
                 first = false;
                 let _ = ws.read();
+                let _ = ws.send(Message::text(serde_json::to_string(&welcome()).unwrap()));
+                std::thread::sleep(Duration::from_millis(300));
                 drop(ws);
                 continue;
             }
@@ -723,7 +913,7 @@ fn leaving_while_reconnecting_still_leaves() {
     drop(c);
     std::thread::sleep(Duration::from_secs(6));
     if !*left.lock().unwrap() {
-        bug("the client threw the Leave away and shut down, though the server was reachable again: the seat stays a ghost for 10 minutes");
+        fail("the client threw the Leave away and shut down, though the server was reachable again: the seat stays a ghost for 10 minutes");
     }
 }
 
@@ -770,7 +960,7 @@ fn server_restart_marks_absent_players_away() {
                 let kind = s.seats[2].kind;
                 println!("after the restart, Ann sees Bo as {kind:?}");
                 if kind != SeatKind::Away {
-                    bug(format!(
+                    fail(format!(
                         "Bo's connection died in the restart but the room still has them as {kind:?} (connected): 60 s turns instead of 15, never released to a bot"
                     ));
                 }
@@ -805,23 +995,23 @@ fn idle_connection_stays_up() {
         std::thread::sleep(Duration::from_millis(100));
     }
     if welcomes > 0 || c.status() != Status::Connected {
-        bug(format!("an idle connection reconnected {welcomes} time(s) in 80 s; status {:?}", c.status()));
+        fail(format!("an idle connection reconnected {welcomes} time(s) in 80 s; status {:?}", c.status()));
     }
 }
 
 /// A shipped Windows game must not open a console window behind itself. That's the PE header's
 /// subsystem field: 2 is a window, 3 is a console.
 fn release_exe_has_no_console_window() {
-    let root = env!("CARGO_MANIFEST_DIR");
-    let candidates = [format!("{root}/target/hunt/release/cabin-euchre.exe"), format!("{root}/target/release/cabin-euchre.exe")];
-    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+    // This exe is in target/debug/deps/, or wherever CARGO_TARGET_DIR says.
+    let exe = std::env::current_exe().unwrap();
+    let Some(bytes) = exe.ancestors().find_map(|dir| std::fs::read(dir.join("release/cabin-euchre.exe")).ok()) else {
         skip("no release build found: run `cargo build --release`");
     };
     let pe = u32::from_le_bytes(bytes[0x3c..0x40].try_into().unwrap()) as usize;
     assert_eq!(&bytes[pe..pe + 4], b"PE\0\0");
     let subsystem = u16::from_le_bytes(bytes[pe + 24 + 68..pe + 24 + 70].try_into().unwrap());
     if subsystem != 2 {
-        bug(format!(
+        fail(format!(
             "the release .exe has PE subsystem {subsystem} (console), so Windows opens a console window behind the game. main.rs has no #![windows_subsystem = \"windows\"]"
         ));
     }

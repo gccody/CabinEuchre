@@ -329,7 +329,7 @@ fn sitting_down_mid_hand_waits_for_the_next_deal() {
     assert!(!room.take_outbox().iter().any(|o| o.to == cy && matches!(o.msg, ServerMsg::Sync { .. })));
     // A late player's seat survives a save and a reload, still waiting.
     let mut room = Room::restore(room.snapshot()).unwrap();
-    assert_eq!(room.snapshot().waiting[cy], true);
+    assert!(room.snapshot().waiting[cy]);
     // Nothing waits on them this hand, and they don't hear about its moves.
     for _ in 0..200 {
         let before = room.game().unwrap().hand_number;
