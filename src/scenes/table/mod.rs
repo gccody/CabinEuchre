@@ -191,7 +191,7 @@ struct GameOver {
     focus: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum PauseChoice {
     Resume,
     /// The host's answer to the first request to join.
@@ -333,25 +333,25 @@ impl Table {
         let Some(start) = start else {
             return Err(Box::new((link, pending)));
         };
-        // Requests to join aren't about the hand: the latest list counts.
+        // Requests to join and seats aren't about the hand: the latest counts, even if it
+        // came after the deal, since only the hand's own messages are kept for later.
         let mut knocks = None;
         for msg in pending.iter() {
-            if let ServerMsg::Knocks { requests } = msg {
-                knocks = Some(requests.clone());
+            match msg {
+                ServerMsg::Knocks { requests } => knocks = Some(requests.clone()),
+                ServerMsg::Seats(s) => seats = Some(s.clone()),
+                _ => {}
             }
         }
         let start = start - pending.iter().take(start).filter(|m| matches!(m, ServerMsg::Knocks { .. })).count();
         pending.retain(|m| !matches!(m, ServerMsg::Knocks { .. }));
-        for msg in pending.drain(..start) {
-            if let ServerMsg::Seats(s) = msg {
-                seats = Some(s);
-            }
-        }
+        pending.drain(..start);
         let game = match pending.pop_front() {
             Some(ServerMsg::Deal(hand)) => Mirror::new(&hand),
             Some(ServerMsg::Sync { hand, moves }) => Mirror::replay(&hand, &moves),
             _ => unreachable!("found above"),
         };
+        pending.retain(|m| matches!(m, ServerMsg::Deal(_) | ServerMsg::Sync { .. } | ServerMsg::Acted(_)));
         let game = match game {
             Ok(g) => g,
             Err(e) => {
@@ -482,12 +482,13 @@ impl Table {
             self.menu_button.label = label;
             self.menu_button.nudge();
         }
-        // The open menu follows along.
-        if let Some(p) = &mut self.pause {
-            let was = p.focus;
-            let buttons = self.pause_buttons();
-            let p = self.pause.as_mut().expect("checked above");
-            p.focus = was.min(buttons.len() - 1);
+        // The open menu follows along, with the focus staying on the same control,
+        // or going to RESUME if that's gone: the same place in the list could now be
+        // anything, and a press meant for LET IN mustn't make the table public.
+        let buttons = self.pause.is_some().then(|| self.pause_buttons());
+        if let (Some(p), Some(buttons)) = (&mut self.pause, buttons) {
+            let was = p.buttons.get(p.focus).map(|(choice, _)| *choice);
+            p.focus = was.and_then(|c| buttons.iter().position(|(choice, _)| *choice == c)).unwrap_or(0);
             p.buttons = buttons;
         }
     }
@@ -1177,9 +1178,20 @@ impl Table {
 
     fn new_game(&mut self, shared: &Shared) {
         if self.link.is_online() {
-            if self.link.status() != Status::Connected {
+            match self.link.status() {
+                Status::Connected => {}
+                Status::Failed(_) => {
+                    self.hint = Some(("This table is gone. Leave from the menu.".into(), 3.0));
+                    return;
+                }
                 // It would never get there; ask again once we're back.
-                self.hint = Some(("Reconnecting. Try again in a moment.".into(), 3.0));
+                _ => {
+                    self.hint = Some(("Reconnecting. Try again in a moment.".into(), 3.0));
+                    return;
+                }
+            }
+            if !self.hosting {
+                self.hint = Some(("Waiting for the host to deal.".into(), 3.0));
                 return;
             }
             // Everyone at the table gets the new deal; `drive` lays it out.
@@ -1712,7 +1724,14 @@ impl Scene for Table {
                 self.continue_after_hand(shared);
             }
         }
+        // Online, only the host can start another game.
+        let can_deal = !self.link.is_online() || self.hosting;
         if let Some(g) = &mut self.game_over {
+            if g.again.enabled != can_deal {
+                g.again.enabled = can_deal;
+                g.again.label = if can_deal { "PLAY AGAIN" } else { "HOST DEALS" }.into();
+                g.again.nudge();
+            }
             g.age += dt;
             g.pop.update(dt);
             let m = if self.pause.is_none() { shared.mouse } else { NO_POINTER };
@@ -1773,7 +1792,7 @@ impl Scene for Table {
         }
         if let Some(go) = &mut self.game_over {
             if matches!(key, Key::Enter | Key::Space) {
-                go.again.flash(&shared.sfx);
+                go.again.activate(&shared.sfx);
                 self.new_game(shared);
             }
             return Transition::None;
@@ -1860,8 +1879,9 @@ impl Scene for Table {
                     shared.tick();
                 }
                 Nav::Confirm if go.focus == 0 => {
-                    go.again.flash(&shared.sfx);
-                    shared.tap();
+                    if go.again.activate(&shared.sfx) {
+                        shared.tap();
+                    }
                     self.new_game(shared);
                 }
                 Nav::Confirm => {

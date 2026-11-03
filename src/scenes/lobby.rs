@@ -7,10 +7,11 @@
 //!   name). Mouse, touch, gamepad and a real keyboard all type on it, so it
 //!   works the same on a phone, a Steam Deck or a desktop.
 //! - **Connecting**, then **Seated**: the room code in big brass tiles, the
-//!   four seats (tap a bot's seat to move there), DEAL, INVITE (Steam) and LEAVE.
-//!   Bots fill any seat nobody takes. Tables are private: a Steam friend's
-//!   "Join Game" only asks, and the host gets LET IN / NO. The host can
-//!   MAKE PUBLIC so friends sit straight down. The code always gets you in.
+//!   four seats (tap a bot's seat to move there), INVITE (Steam) and LEAVE.
+//!   Bots fill any seat nobody takes. Only the host gets DEAL. Tables are
+//!   private: a Steam friend's "Join Game" only asks, and the host gets LET IN /
+//!   NO. The host can MAKE PUBLIC so friends sit straight down. The code always
+//!   gets you in. If a game is on, you're dealt in at the next hand.
 //! - **Knocking**: asked to join by "Join Game", waiting for the host.
 //! - **Failed**: why, and BACK.
 //!
@@ -18,6 +19,7 @@
 //! handed to the table scene.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use love2drs::prelude::*;
 
@@ -207,7 +209,32 @@ impl Lobby {
     fn rebuild(&mut self, shared: &Shared) {
         let was = self.buttons.get(self.focus).map(|(a, _)| *a);
         self.buttons = self.build(shared);
-        self.focus = was.and_then(|a| self.buttons.iter().position(|(b, _)| *b == a)).unwrap_or(0);
+        self.focus = was.and_then(|a| self.buttons.iter().position(|(b, _)| *b == a)).unwrap_or_else(|| self.seated_focus());
+    }
+
+    /// Where the focus starts when sitting down: on DEAL, not on something a second
+    /// press would change by accident. A guest has no DEAL, and LEAVE is the last resort.
+    fn seated_focus(&self) -> usize {
+        let find = |wanted: &dyn Fn(Act) -> bool| self.buttons.iter().position(|(a, _)| wanted(*a));
+        find(&|a| a == Act::Deal)
+            .or_else(|| find(&|a| a != Act::Leave && self.visible(a) && self.usable(a)))
+            .or_else(|| find(&|a| a == Act::Leave))
+            .unwrap_or(0)
+    }
+
+    /// Gets up from the table. While we're still connecting nothing has happened yet:
+    /// a seat we held from before stays ours, along with the memory of it, and only a
+    /// seat we might just have been given goes back.
+    fn give_up_seat(&mut self) {
+        let arrived = self.code.is_some();
+        if let Some(link) = &mut self.link
+            && (arrived || !link.rejoining())
+        {
+            link.send(ClientMsg::Leave);
+        }
+        if arrived {
+            seat_memory::forget();
+        }
     }
 
     /// We answer requests to join and choose public or private.
@@ -284,7 +311,10 @@ impl Lobby {
                     let p = seat_pos(seat);
                     b.push((Act::Sit(seat), Button::grey("SIT HERE", Rect::centered(p.x, p.y + 16.0, 62.0, 14.0))));
                 }
-                let mut row = vec![(Act::Deal, Button::brass("DEAL", Rect::new(0.0, bottom - 10.0, 84.0, 22.0)).scaled(1.2))];
+                let mut row = Vec::new();
+                if self.hosting() {
+                    row.push((Act::Deal, Button::brass("DEAL", Rect::new(0.0, bottom - 10.0, 84.0, 22.0)).scaled(1.2)));
+                }
                 if platform::can_invite() {
                     row.push((Act::Invite, Button::blue("INVITE FRIENDS", Rect::new(0.0, bottom - 9.0, 104.0, 20.0))));
                 }
@@ -372,7 +402,10 @@ impl Lobby {
                     let p = seat_pos(seat);
                     b.push((Act::Sit(seat), Button::grey("SIT HERE", Rect::centered(p.x, p.y + 28.0, 88.0, 32.0))));
                 }
-                let mut row = vec![(Act::Deal, Button::brass("DEAL", Rect::new(0.0, bottom - 24.0, 150.0, 46.0)).scaled(2.0))];
+                let mut row = Vec::new();
+                if self.hosting() {
+                    row.push((Act::Deal, Button::brass("DEAL", Rect::new(0.0, bottom - 24.0, 150.0, 46.0)).scaled(2.0)));
+                }
                 if platform::can_invite() {
                     row.push((Act::Invite, Button::blue("INVITE FRIENDS", Rect::new(0.0, bottom - 22.0, 160.0, 42.0)).scaled(1.2)));
                 }
@@ -397,7 +430,7 @@ impl Lobby {
                 Stage::Entry(Field::Code) => clean_code(&self.entry).is_some(),
                 _ => true,
             },
-            Act::Deal => self.seats.as_ref().is_some_and(|s| !s.playing) && !self.dealing,
+            Act::Deal => self.hosting() && self.seats.as_ref().is_some_and(|s| !s.playing) && !self.dealing,
             _ => true,
         }
     }
@@ -431,6 +464,11 @@ impl Lobby {
     fn privacy_left(&self, shared: &Shared) -> f32 {
         let button = if self.hosting() { PRIVACY_GAP + PRIVACY_BUTTON_W } else { 0.0 };
         (CX - (self.privacy_width(shared) + button) / 2.0).round()
+    }
+
+    /// A guest at a table with no game on.
+    fn waiting_for_host(&self) -> bool {
+        !self.hosting() && self.seats.as_ref().is_some_and(|s| !s.playing)
     }
 
     fn knock_showing(&self) -> bool {
@@ -480,7 +518,12 @@ impl Lobby {
                     }
                 }
                 Stage::Entry(Field::Name) => {
-                    shared.settings.name = crate::euchre::protocol::clean_name(&self.entry);
+                    // Nothing typed means no name of your own: back to the store's, or PLAYER.
+                    shared.settings.name = if self.entry.trim().is_empty() {
+                        String::new()
+                    } else {
+                        crate::euchre::protocol::clean_name(&self.entry)
+                    };
                     shared.settings.save();
                     self.set_stage(Stage::Menu, shared);
                 }
@@ -504,11 +547,8 @@ impl Lobby {
                 }
             }
             Act::Leave => {
-                if let Some(link) = &mut self.link {
-                    link.send(ClientMsg::Leave);
-                }
+                self.give_up_seat();
                 self.link = None;
-                seat_memory::forget();
                 platform::set_presence(None);
                 self.set_stage(Stage::Menu, shared);
             }
@@ -614,8 +654,7 @@ impl Lobby {
                 );
             }
             self.set_stage(Stage::Seated, shared);
-            // Start on DEAL, not on something a second press would change by accident.
-            self.focus = self.buttons.iter().position(|(a, _)| *a == Act::Deal).unwrap_or(0);
+            self.focus = self.seated_focus();
         }
         if self.stage == Stage::Seated
             && matches!(self.link.as_ref().map(Link::status), Some(Status::Connecting | Status::Reconnecting))
@@ -822,7 +861,7 @@ impl Scene for Lobby {
                 g.set_color(palette::FELT);
                 ui::chamfer(g, Fill, felt.x, felt.y, felt.w, felt.h, 12.0);
                 let (line1, line2) = match &self.seats {
-                    Some(s) if s.playing => ("A game is on...".to_string(), String::new()),
+                    Some(s) if s.playing => ("A game is on...".to_string(), "In from the next hand".to_string()),
                     Some(s) => (
                         format!("Playing to {}", s.target),
                         if s.stick_the_dealer { "Stick the dealer" } else { "Misdeals redeal" }.to_string(),
@@ -850,6 +889,9 @@ impl Scene for Lobby {
                         ui::chamfer(g, Fill, plate.x, plate.y, plate.w, plate.h, 3.0);
                         Text::new(&label, p.x, p.y).color(color).center().draw(g, font);
                     }
+                }
+                if self.waiting_for_host() {
+                    Text::new("Waiting for the host to deal", CX, 279.0).color(palette::MUTED).center().draw(g, font);
                 }
                 if self.knock_showing() {
                     let k = &self.knocks[0];
@@ -991,8 +1033,10 @@ impl Scene for Lobby {
     }
 
     fn suspend(&mut self, _shared: &mut Shared) {
+        self.give_up_seat();
+        // Give it a moment to get out before the game exits.
         if let Some(link) = &mut self.link {
-            link.send(ClientMsg::Leave);
+            link.finish(Duration::from_millis(300));
         }
         platform::set_presence(None);
     }
@@ -1019,12 +1063,15 @@ impl Lobby {
             Text::new(tag, left, 144.0).color(color).anchor(0.0, 0.5).draw(g, font);
             Text::new(rest, left + font.width(&format!("{tag}  ")), 144.0).color(palette::MUTED).anchor(0.0, 0.5).draw(g, font);
             let (line1, line2) = if s.playing {
-                ("A game is on...".to_string(), String::new())
+                ("A game is on...".to_string(), "You're in from the next hand.".to_string())
             } else {
                 (format!("Playing to {}", s.target), if s.stick_the_dealer { "Stick the dealer" } else { "Misdeals redeal" }.to_string())
             };
             Text::new(&line1, lx, 222.0).color(palette::CREAM).center().draw(g, font);
             Text::new(&line2, lx, 236.0).color(palette::MUTED).center().draw(g, font);
+            if self.waiting_for_host() {
+                Text::new("Waiting for the host to deal", lx, 256.0).color(palette::MUTED).center().draw(g, font);
+            }
         }
         let felt = Rect::centered(rx, sy, 96.0, 50.0);
         g.set_color(palette::INK);
