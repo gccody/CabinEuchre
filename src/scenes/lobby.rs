@@ -861,7 +861,7 @@ impl Scene for Lobby {
                 g.set_color(palette::FELT);
                 ui::chamfer(g, Fill, felt.x, felt.y, felt.w, felt.h, 12.0);
                 let (line1, line2) = match &self.seats {
-                    Some(s) if s.playing => ("A game is on...".to_string(), "In from the next hand".to_string()),
+                    Some(s) if s.playing => ("A game is on...".to_string(), "You join next hand".to_string()),
                     Some(s) => (
                         format!("Playing to {}", s.target),
                         if s.stick_the_dealer { "Stick the dealer" } else { "Misdeals redeal" }.to_string(),

@@ -202,7 +202,6 @@ impl EuchreRoom {
                 return Ok(());
             }
         };
-        self.notice_lost_sockets(&mut room);
         f(&mut room, &mut saved);
         // Requests the host answered: seat the waiting sockets before their
         // welcome goes out, or turn them away.
@@ -219,6 +218,7 @@ impl EuchreRoom {
                 let _ = ws.close(Some(4003), Some("Not let in"));
             }
         }
+        self.notice_lost_sockets(&mut room);
         self.deliver(&mut room);
         saved.room = room.snapshot();
         self.schedule(&room, &mut saved).await?;
@@ -231,8 +231,9 @@ impl EuchreRoom {
     /// while the stored room still has everyone connected. So each time the room
     /// wakes it checks: a player with no socket has dropped, and a request to join
     /// with no socket has given up. Sockets outlive hibernation, so a room that was
-    /// only asleep finds nothing to do. A socket seated in this same call isn't
-    /// missed, since this runs first and they get their attachment as they sit down.
+    /// only asleep finds nothing to do. This runs after the event, once a socket
+    /// that just arrived has its attachment: otherwise the first player back would
+    /// count as gone too, and the host's job would move away from them.
     fn notice_lost_sockets(&self, room: &mut Room) {
         for seat in 0..4 {
             let lost = matches!(&room.seats()[seat], Occupant::Human { token, connected: true, .. } if self.holding(token).is_empty());

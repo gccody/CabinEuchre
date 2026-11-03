@@ -947,7 +947,9 @@ fn server_restart_marks_absent_players_away() {
     // Ann's game reconnects by itself and is told who's where. Bo never returned.
     let until = Instant::now() + Duration::from_secs(240);
     let mut lost_connection = false;
-    while Instant::now() < until {
+    let mut latest = None;
+    let mut settled = until;
+    while Instant::now() < until.min(settled) {
         if c_lost(&ann) {
             lost_connection = true;
         }
@@ -956,18 +958,25 @@ fn server_restart_marks_absent_players_away() {
                 && lost_connection
                 && ann.status() == Status::Connected
             {
-                // Relative to Ann: Bo, who sat second, is across the table.
-                let kind = s.seats[2].kind;
-                println!("after the restart, Ann sees Bo as {kind:?}");
-                if kind != SeatKind::Away {
-                    fail(format!(
-                        "Bo's connection died in the restart but the room still has them as {kind:?} (connected): 60 s turns instead of 15, never released to a bot"
-                    ));
-                }
-                return;
+                latest = Some(s);
+                settled = Instant::now() + Duration::from_secs(2);
             }
         }
         std::thread::sleep(Duration::from_millis(50));
+    }
+    if let Some(s) = latest {
+        // Relative to Ann: Bo, who sat second, is across the table.
+        let kind = s.seats[2].kind;
+        println!("after the restart, Ann sees Bo as {kind:?}, and the host is {:?}", s.host);
+        if kind != SeatKind::Away {
+            fail(format!(
+                "Bo's connection died in the restart but the room still has them as {kind:?} (connected): 60 s turns instead of 15, never released to a bot"
+            ));
+        }
+        if s.seats[0].kind != SeatKind::Human || s.host != Some(0) {
+            fail("Ann came back and should still be the host");
+        }
+        return;
     }
     println!("(setup problem) the server never came back");
     std::process::exit(2);
