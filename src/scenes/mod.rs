@@ -5,17 +5,20 @@ pub mod options;
 pub mod rules;
 pub mod table;
 pub mod title;
+pub mod trophies;
 
 use love2drs::prelude::*;
 
 use crate::scene::{Nav, Shared};
 use options::OptionsPanel;
 use rules::RulesPanel;
+use trophies::TrophyPanel;
 
 /// A modal panel drawn over a scene. While one is open the scene below is paused.
 pub enum Overlay {
     Options(Box<OptionsPanel>),
     Rules(Box<RulesPanel>),
+    Trophies(Box<TrophyPanel>),
 }
 
 impl Overlay {
@@ -23,6 +26,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.update(shared, dt),
             Overlay::Rules(p) => p.update(shared, dt),
+            Overlay::Trophies(p) => p.update(shared, dt),
         }
     }
 
@@ -30,6 +34,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.draw(shared, g),
             Overlay::Rules(p) => p.draw(shared, g),
+            Overlay::Trophies(p) => p.draw(shared, g),
         }
     }
 
@@ -38,6 +43,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.mouse_pressed(shared, pos),
             Overlay::Rules(p) => p.mouse_pressed(shared, pos),
+            Overlay::Trophies(p) => p.mouse_pressed(shared, pos),
         }
     }
 
@@ -53,6 +59,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.touch_released(shared, pos),
             Overlay::Rules(p) => p.mouse_pressed(shared, pos),
+            Overlay::Trophies(p) => p.mouse_pressed(shared, pos),
         }
     }
 
@@ -61,6 +68,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.nav(shared, nav),
             Overlay::Rules(p) => p.nav(shared, nav),
+            Overlay::Trophies(p) => p.nav(shared, nav),
         }
     }
 
@@ -69,6 +77,7 @@ impl Overlay {
         match self {
             Overlay::Options(p) => p.key_pressed(shared, key),
             Overlay::Rules(p) => p.key_pressed(shared, key),
+            Overlay::Trophies(p) => p.key_pressed(shared, key),
         }
     }
 }

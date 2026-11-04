@@ -14,13 +14,25 @@
 //! - `+knock HANDLE` from rich presence ("Join Game" in the friends list):
 //!   only asks to join. The host lets them in, unless the table is public.
 //!   Rich presence never carries the code.
+//!
+//! Trophies go to the store's own achievements as well as being kept in the
+//! record: Steam, Game Center on iOS, Play Games on Android. Everywhere else
+//! they're only local. The stores ignore what they already have, so
+//! [`report_achievements`] can always be called with anything, and each one holds
+//! on to reports until the player is signed in. What a store already has comes
+//! back through [`take_store_trophies`], for a new device or a reinstall.
 
+#[cfg(target_os = "ios")]
+mod game_center;
+#[cfg(target_os = "android")]
+mod play_games;
 #[cfg(feature = "steam")]
 mod steam;
 
 use std::sync::Mutex;
 
 use crate::euchre::protocol::{clean_code, clean_handle};
+use crate::euchre::record::Achievement;
 
 /// Where a friend's invite or "Join Game" leads.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +51,10 @@ static JOIN_REQUEST: Mutex<Option<JoinRequest>> = Mutex::new(None);
 pub fn init() {
     #[cfg(feature = "steam")]
     steam::init();
+    #[cfg(target_os = "ios")]
+    game_center::init();
+    #[cfg(target_os = "android")]
+    play_games::init();
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "+connect" || a == "+knock")
         && let Some(arg) = args.get(i + 1)
@@ -51,6 +67,8 @@ pub fn init() {
 pub fn update() {
     #[cfg(feature = "steam")]
     steam::update();
+    #[cfg(target_os = "ios")]
+    game_center::update();
 }
 
 /// Records a connect string from Steam: `+connect CODE` or `+knock HANDLE`
@@ -112,6 +130,77 @@ pub fn set_presence(room: Option<(&str, usize)>) {
     steam::set_presence(room);
     #[cfg(not(feature = "steam"))]
     let _ = room;
+}
+
+/// Tells the store about trophies. Screenshots and checks that ignore the player's
+/// files leave their account alone too (`EUCHRE_DEFAULT_SETTINGS`, `EUCHRE_RECORD=demo`).
+pub fn report_achievements(list: &[Achievement]) {
+    #[cfg(any(feature = "steam", target_os = "ios", target_os = "android"))]
+    if !list.is_empty() && crate::record::is_saved() {
+        #[cfg(feature = "steam")]
+        steam::report(list);
+        #[cfg(target_os = "ios")]
+        game_center::report(list);
+        #[cfg(target_os = "android")]
+        play_games::report(list);
+    }
+    #[cfg(not(any(feature = "steam", target_os = "ios", target_os = "android")))]
+    let _ = list;
+}
+
+/// Trophies the store told us the player has, waiting to be taken.
+#[cfg(any(feature = "steam", target_os = "ios", target_os = "android"))]
+static STORE_TROPHIES: Mutex<Vec<Achievement>> = Mutex::new(Vec::new());
+
+/// A store backend found a trophy the player has.
+#[cfg(any(feature = "steam", target_os = "ios", target_os = "android"))]
+fn store_has(a: Achievement) {
+    if let Ok(mut list) = STORE_TROPHIES.lock() {
+        list.push(a);
+    }
+}
+
+/// What the store says the player has already earned, since the last call.
+pub fn take_store_trophies() -> Vec<Achievement> {
+    #[cfg(any(feature = "steam", target_os = "ios", target_os = "android"))]
+    if let Ok(mut list) = STORE_TROPHIES.lock() {
+        return std::mem::take(&mut *list);
+    }
+    Vec::new()
+}
+
+/// The store trophies sync with right now, for the trophy shelf.
+pub fn store_name() -> Option<&'static str> {
+    #[cfg(feature = "steam")]
+    if steam::running() {
+        return Some("STEAM");
+    }
+    #[cfg(target_os = "ios")]
+    if game_center::signed_in() {
+        return Some("GAME CENTER");
+    }
+    #[cfg(target_os = "android")]
+    if play_games::signed_in() {
+        return Some("PLAY GAMES");
+    }
+    None
+}
+
+/// Whether the trophy shelf should offer a button to sign in to the store.
+pub fn can_sign_in() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        play_games::can_sign_in()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
+pub fn sign_in() {
+    #[cfg(target_os = "android")]
+    play_games::sign_in();
 }
 
 #[cfg(test)]

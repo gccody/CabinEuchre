@@ -8,7 +8,8 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
 stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
 game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted), an
-illustrated How to Play, and LEARN TO PLAY, a scripted match where Benny teaches you the game. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
+illustrated How to Play, LEARN TO PLAY, a scripted match where Benny teaches you the game, and a trophy
+shelf with lifetime stats. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
 macOS and Linux, and on Android and iOS phones and tablets (see "Phones and tablets").
 
 **Online play** (cross-platform): host a table or join one with a 6-letter code; bots fill empty
@@ -55,7 +56,8 @@ the monitor's refresh rate.
 | variable | effect |
 |---|---|
 | `EUCHRE_FIXED_DT=n` | every frame advances exactly n/60 s (1 for screenshots, 4 to fast-forward soak runs) |
-| `EUCHRE_SCENE=table\|continue\|options\|rules` | start in a game, resume the saved game, or on the title with a panel open |
+| `EUCHRE_SCENE=table\|continue\|options\|rules\|trophies` | start in a game, resume the saved game, or on the title with a panel open |
+| `EUCHRE_RECORD=demo` | start from a made-up season of play with one trophy about to pop up (screenshots of the shelf and banner). Nothing is read, saved or sent to a store |
 | `EUCHRE_SCENE=online\|host\|code` | the PLAY ONLINE menu, hosting a new table right away, or the code keyboard (with "KQJ" typed). With any `EUCHRE_SCENE` (or autoplay) the lobby logs the table code and handle when you sit down, for `netcheck` |
 | `EUCHRE_SCENE=learn` | start the tutorial. `EUCHRE_LESSON=n` picks the lesson (from 0; 5 and up are the unscripted extra hands) and `EUCHRE_LESSON_SCORE=us-them` the score |
 | `EUCHRE_SERVER=ws://...` | the room server (also read at build time; debug builds default to `ws://127.0.0.1:8787`, i.e. `wrangler dev`, and release builds to the live server) |
@@ -87,15 +89,16 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
 | `src/device.rs` | `mobile()`, which every phone and tablet branch goes through (always false on a desktop unless previewing), and `var()` for debug switches |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
-| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
+| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), `record` (lifetime stats and trophies), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
 | `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `Link::Tutorial` is a `TutorialRoom` (the lessons); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
-| `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). No-ops without it |
+| `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). Also trophies on Steam, Game Center (`game_center.rs`) and Play Games (`play_games.rs`). No-ops without them |
 | `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, private/public, seats, LET IN / NO, DEAL (host only), INVITE, LEAVE), waiting for the host after a knock. Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
 | `src/scenes/table/` | the game: `mod.rs` state, cue timeline, actions and input; `layout.rs` where every place sits; `draw.rs` all rendering |
 | `src/scenes/table/coach.rs`, `coach_draw.rs`, `lessons.rs` | the tutorial on top of the table: what happens when and what's allowed; Benny's note, chapter cards, glove and report; and everything he says |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
+| `src/scenes/trophies.rs` | the trophy shelf (an overlay on the title: your numbers, then every trophy) and the banner for a new trophy, which the app draws over every scene |
 | `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, tabletop background, lamplight present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
 | `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
 | `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is `UNIT` (4/3) design px at scale 1 |
@@ -107,6 +110,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/sfx.rs` | procedural sound effects (`Sound` enum), pitch jitter, synthesized lounge music loop |
 | `src/settings.rs` | options persisted to `%APPDATA%\CabinEuchre\settings.txt` (or `~/.config/cabin-euchre/`) |
 | `src/savegame.rs` | the save slot, `savegame.txt` in the same folder: read, write (atomically), forget a finished game |
+| `src/record.rs` | your stats and trophies, `stats.txt` in the same folder. The rules are in `core/src/record.rs` |
 | `src/assets.rs` | asset path lookup (cwd, crate root, exe dir) |
 | `tools/make_icon.py` | paints `assets/icon.png` and `assets/icon.ico` (`python tools/make_icon.py`, needs Pillow). Keep its outer edge one flat color: Android fills around the icon with the corner color |
 | `build.rs` | Windows only: embeds `assets/icon.ico` and the game's name in the `.exe` (needs `rc.exe` from the Windows SDK) |
@@ -167,6 +171,27 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   sampling by a rounding error, and the PC screenshots stop matching.
 - `cargo test --test scene_checks -- tutorial` walks the lessons in a real window. To see them, set `EUCHRE_PROOF_SHOTS=dir` to save
   a picture of every beat and `EUCHRE_PROOF_SPEED=3` to hurry up. With `EUCHRE_MOBILE` and friends, that covers the other layouts too.
+
+### Trophies and stats
+
+- **`docs/achievements.md` has the list and what each store needs.** Adding a trophy means a line in
+  `core/src/record.rs`, a row there (a test checks) and setting it up on all three stores. Ids never change.
+- **Everything counts from the table's `Mirror`** (`Table::record_hand`, when a result is shown), so offline and online
+  are the same. It counts the game there too, so leaving at the final banner keeps it. A game you leave counts
+  for nothing, not as a loss. The tutorial only earns its own trophy.
+- **A hand counts once.** `Record` remembers the game (`local:ID` or `online:CODE:N`) and the last hand number, because a
+  resume or a reconnect can show the same result again.
+- **Stats only stay local; trophies also go to the store** (`platform::report_achievements`). The stores ignore what they
+  have, so everything is reported at every launch, and each backend holds reports until the player is signed in. What a store
+  already has comes back through `platform::take_store_trophies`, quietly, with no banner.
+- **Play Games is off in `Cargo.toml`** until the Play Console is set up, because the SDK needs Gradle. `play_games.rs` turns
+  itself off when the classes aren't in the build.
+- **Play Games needs the real `Activity`,** from `love2drs::android_app()`. `ndk_context` holds the `Application`, and passing
+  that to an `Activity` argument aborts the process (checked JNI), but only when the SDK is in the build. Turn it on and run it
+  before trusting a change there, since the plain build never gets that far.
+- **`GKAchievement` forwards its properties.** They work, but the class has no such methods, so `msg_send!`'s debug check
+  aborts on them. `game_center.rs` sends those directly (`forwarded`). Only a run can catch this, since it compiles either way.
+- The shelf and banner read `shared.record`, and nothing on the table draws trophies.
 
 ### Online play
 
@@ -347,4 +372,3 @@ other game's) sprites, shaders, sounds or other files.
 
 - Smarter AI (card counting for voids, better lone-hand judgment), difficulty levels.
 - Optional house rules: defending alone, "farmer's hand", no-trump.
-- Statistics (games won, euchres) saved alongside settings.

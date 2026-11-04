@@ -195,6 +195,25 @@ impl Round {
         self.tricks_won[team] + self.tricks_won[team + 2]
     }
 
+    /// The cards `seat` has played this hand, in order. Each trick's leader is
+    /// the last one's winner, so seats can be worked out from the play order.
+    pub fn played_by(&self, seat: Seat) -> Vec<Card> {
+        let mut cards = Vec::new();
+        let mut leader = self.next_active(self.dealer);
+        for (i, trick) in self.played.chunks(self.active_players()).enumerate() {
+            let mut at = leader;
+            for &card in trick {
+                if at == seat {
+                    cards.push(card);
+                }
+                at = self.next_active(at);
+            }
+            let Some(&winner) = self.trick_winners.get(i) else { break };
+            leader = winner;
+        }
+        cards
+    }
+
     /// The effective suit led in the current trick.
     pub fn led_suit(&self) -> Option<Suit> {
         let trump = self.trump?;

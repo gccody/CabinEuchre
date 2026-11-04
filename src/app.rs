@@ -14,8 +14,10 @@ use love2drs::prelude::*;
 use crate::cards::CardArt;
 use crate::device;
 use crate::palette;
+use crate::record::PlayerRecord;
 use crate::render::{Renderer, VIEW_H, VIEW_W};
 use crate::scene::{Buzz, InputMode, NO_POINTER, Nav, Scene, Shared, Transition};
+use crate::scenes::trophies::{TrophyBanners, TrophyPanel};
 use crate::scenes::{Overlay, lobby::Lobby, options::OptionsPanel, rules::RulesPanel, table::Table, title::Title};
 use crate::settings::Settings;
 use crate::sfx::Sfx;
@@ -35,6 +37,8 @@ pub struct App {
     renderer: Renderer,
     shared: Shared,
     scene: Box<dyn Scene>,
+    /// Banners for trophies just earned, over every scene.
+    banners: TrophyBanners,
     /// 1 = fully black, fades to 0 after a scene switch.
     fade: f32,
     /// Debug: `EUCHRE_FIXED_DT=n` steps exactly n/60 s per frame, so
@@ -117,6 +121,7 @@ impl App {
             cards: CardArt::new(&ctx.graphics),
             sfx: Sfx::new(&ctx.audio),
             settings,
+            record: PlayerRecord::load(),
             time: 0.0,
             mouse: NO_POINTER,
             mouse_down: false,
@@ -136,6 +141,9 @@ impl App {
         // Held arrow keys repeat focus moves (every other key ignores repeats).
         ctx.keyboard.set_key_repeat(true);
         crate::platform::init();
+        // Everything goes to the store at every launch: it ignores what it has, and this
+        // catches whatever was earned offline, signed out or before an earlier failure.
+        crate::platform::report_achievements(&shared.record.data.unlocked);
         // Debug: `EUCHRE_SCENE=table|continue|online|options|rules` jumps straight to a screen (for screenshots).
         let scene: Box<dyn Scene> = match device::var("EUCHRE_SCENE").as_deref() {
             // Launched from a friend's Steam invite or "Join Game".
@@ -160,12 +168,14 @@ impl App {
             },
             Some("options") => Box::new(Title::with_overlay(Overlay::Options(Box::new(OptionsPanel::new())))),
             Some("rules") => Box::new(Title::with_overlay(Overlay::Rules(Box::new(RulesPanel::new())))),
+            Some("trophies") => Box::new(Title::with_overlay(Overlay::Trophies(Box::new(TrophyPanel::new())))),
             _ => Box::new(Title::new()),
         };
         Ok(App {
             renderer,
             shared,
             scene,
+            banners: TrophyBanners::new(),
             fade: 1.0,
             primary_touch: None,
             last_touch: None,
@@ -290,6 +300,15 @@ impl App {
         }
     }
 
+    /// Trophies move between the record, the store and the banners.
+    fn follow_trophies(&mut self, dt: f32) {
+        let fresh = self.shared.record.take_fresh();
+        crate::platform::report_achievements(&fresh);
+        self.banners.push(fresh);
+        self.shared.record.merge_from_store(crate::platform::take_store_trophies());
+        self.banners.update(&mut self.shared, dt);
+    }
+
     fn sync_settings(&mut self, ctx: &mut Context) {
         let s = &mut self.shared.settings;
         ctx.audio.set_volume(s.volume);
@@ -322,11 +341,13 @@ impl Game for App {
         }
         let t = self.scene.update(&mut self.shared, ctx, dt);
         self.apply(ctx, t);
+        self.follow_trophies(dt);
         self.play_rumble(ctx, real_dt);
     }
 
     fn draw(&mut self, ctx: &mut Context) {
         let scene = &mut self.scene;
+        let banners = &self.banners;
         let shared = &self.shared;
         let fade = self.fade;
         self.renderer.frame(&mut ctx.graphics, |g| {
@@ -339,6 +360,7 @@ impl Game for App {
                     g.rectangle(Fill, 0.0, 0.0, VIEW_W as f32, VIEW_H as f32);
                 }
             }
+            banners.draw(shared, g);
         });
     }
 

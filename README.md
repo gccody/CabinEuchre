@@ -96,6 +96,7 @@ with big buttons for your thumbs and a table that runs edge to edge.
 
 - **Mouse, keyboard, touchscreen or gamepad**, with rumble on controllers
 - **Save and quit** any time, then pick up right where you left off
+- **24 trophies to earn and your lifetime record**, synced with Steam, Game Center or Google Play Games
 - **Set your own pace** with relaxed, normal and fast game speeds
 - **Windows, macOS, Linux, iOS and Android**
 

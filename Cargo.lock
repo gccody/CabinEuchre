@@ -260,8 +260,12 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 name = "cabin-euchre"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.2",
  "euchre-core",
+ "jni 0.21.1",
  "love2drs",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
  "rustls",
  "serde_json",
  "steamworks",
@@ -1175,7 +1179,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "love2drs"
 version = "0.1.0"
-source = "git+https://github.com/gccody/Love2DRS#299c01f31b4dc2735631fdc704121e03ea04f67e"
+source = "git+https://github.com/gccody/Love2DRS#9a7dcaae7fb0b1595ace42bedb04f5b8a5278ed6"
 dependencies = [
  "ab_glyph",
  "android_logger",

@@ -16,6 +16,7 @@
 use love2drs::prelude::*;
 
 use crate::cards::CardArt;
+use crate::record::PlayerRecord;
 use crate::settings::Settings;
 use crate::sfx::Sfx;
 use crate::text::PixelFont;
@@ -79,6 +80,8 @@ pub struct Shared {
     pub cards: CardArt,
     pub sfx: Sfx,
     pub settings: Settings,
+    /// Your stats and trophies.
+    pub record: PlayerRecord,
     /// Seconds since the game started; drive idle animation from this.
     pub time: f32,
     /// Pointer position in design space, updated every frame: the mouse, the

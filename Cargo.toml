@@ -15,6 +15,9 @@ orientation = "landscape"
 assets = ["assets/music/theme.ogg"]
 icon = "assets/icon.png"
 permissions = ["android.permission.INTERNET"]
+# Play Games trophies are off until the Play Console is set up (docs/achievements.md):
+# android_dependencies = ["com.google.android.gms:play-services-games-v2:22.1.0"]
+# android_meta_data = { "com.google.android.gms.games.APP_ID" = "YOUR_PROJECT_ID" }
 
 [workspace]
 members = [".", "core"]
@@ -33,6 +36,16 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # Steam builds only (`cargo build --features steam`): names, invites, rich presence.
 steamworks = { version = "0.13", optional = true }
+
+# Trophies on Game Center (`src/platform/game_center.rs`).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+block2 = "0.6"
+
+# Trophies on Play Games (`src/platform/play_games.rs`).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
 
 [features]
 steam = ["dep:steamworks"]

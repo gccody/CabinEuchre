@@ -1175,6 +1175,7 @@ impl Table {
         shared.settings.tutorial_done = true;
         shared.settings.lesson = None;
         shared.settings.save();
+        shared.record.finish_tutorial();
     }
 
     /// Picks up the deck for a new lesson: where to come back to if you leave now.

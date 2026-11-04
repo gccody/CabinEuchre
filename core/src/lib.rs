@@ -13,6 +13,7 @@
 //! - `mirror` one player's view of a hand, with the cards they can't see guessed
 //! - `tutorial` the room behind the tutorial: a match dealt from a script
 //! - `advice` what to do here and why, in words: the tutorial's tips and comments
+//! - `record` a player's lifetime stats and trophies
 
 pub mod advice;
 pub mod ai;
@@ -20,6 +21,7 @@ pub mod card;
 pub mod game;
 pub mod mirror;
 pub mod protocol;
+pub mod record;
 pub mod rng;
 pub mod room;
 pub mod round;

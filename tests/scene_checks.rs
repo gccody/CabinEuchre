@@ -39,6 +39,8 @@ mod net;
 mod palette;
 #[path = "../src/platform/mod.rs"]
 mod platform;
+#[path = "../src/record.rs"]
+mod record;
 #[path = "../src/render.rs"]
 mod render;
 #[path = "../src/savegame.rs"]
@@ -128,6 +130,10 @@ const PROOFS: &[(&str, fn())] = &[
     ("title_learn_picks_it_up", title_learn_picks_it_up),
     ("title_learn_starts_over", title_learn_starts_over),
     ("title_learn_question_backs_out", title_learn_question_backs_out),
+    ("trophy_shelf_opens_walks_and_closes", trophy_shelf_opens_walks_and_closes),
+    ("a_played_game_goes_on_the_record", a_played_game_goes_on_the_record),
+    ("leaving_mid_game_keeps_the_hands_but_not_the_game", leaving_mid_game_keeps_the_hands_but_not_the_game),
+    ("shot_trophy_page", shot_trophy_page),
 ];
 
 fn main() {
@@ -380,6 +386,7 @@ fn script(make_scene: impl FnOnce(&Shared) -> Box<dyn Scene> + 'static, steps: V
             cards: cards::CardArt::new(&ctx.graphics),
             sfx: sfx::Sfx::new(&ctx.audio),
             settings: settings::Settings::load(),
+            record: record::PlayerRecord::load(),
             time: 0.0,
             mouse: NO_POINTER,
             mouse_down: false,
@@ -1087,6 +1094,150 @@ fn tutorial_finishing_is_remembered() {
                 let saved = settings::Settings::load();
                 if !saved.tutorial_done || saved.lesson.is_some() {
                     fail(format!("expected done and nothing to pick up, got {} and {:?}", saved.tutorial_done, saved.lesson));
+                }
+                let record = record::PlayerRecord::load().data;
+                if !record.is_unlocked(euchre::record::Achievement::Tutorial) {
+                    fail("finishing the tutorial should earn its trophy");
+                }
+                if record.stats.hands != 0 || record.stats.games != 0 {
+                    fail(format!("the tutorial's {} hands and {} games shouldn't count", record.stats.hands, record.stats.games));
+                }
+            }),
+        ],
+    );
+}
+
+/// The way to the TROPHIES plaque from the top of the menu.
+fn to_trophies() -> Vec<Step> {
+    let steps = [Nav::Down, Nav::Down, Nav::Down, Nav::Down, Nav::Down];
+    steps.into_iter().map(nav).collect()
+}
+
+/// TROPHIES is reachable with a gamepad, and every page can be walked until it closes.
+fn trophy_shelf_opens_walks_and_closes() {
+    let mut steps = to_trophies();
+    steps.push(nav(Nav::Right)); // TROPHIES -> QUIT, on the same row
+    steps.push(act(|h| {
+        let state = h.state();
+        if !state.ends_with("focus 6") {
+            fail(format!("right of TROPHIES should be QUIT: {state}"));
+        }
+    }));
+    steps.push(nav(Nav::Left));
+    steps.push(nav(Nav::Confirm));
+    steps.push(act(|h| {
+        let state = h.state();
+        if !state.contains("trophies") {
+            fail(format!("A on TROPHIES should open the shelf: {state}"));
+        }
+    }));
+    // Back to the first page does nothing, then every page, the last Confirm closing it.
+    steps.push(nav(Nav::Left));
+    steps.push(nav(Nav::NextPage));
+    steps.push(nav(Nav::PrevPage));
+    let pages = 1 + euchre::record::Achievement::ALL.len().div_ceil(7);
+    for _ in 1..pages {
+        steps.push(nav(Nav::Confirm));
+    }
+    steps.push(act(|h| {
+        if !h.state().contains("trophies") {
+            fail("the shelf closed before its last page");
+        }
+    }));
+    steps.push(nav(Nav::Confirm));
+    steps.push(act(|h| {
+        let state = h.state();
+        if !state.contains("menu") {
+            fail(format!("the last page should close the shelf: {state}"));
+        }
+    }));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+/// The shelf on its first trophy page, for a screenshot.
+fn shot_trophy_page() {
+    let mut steps = to_trophies();
+    steps.push(nav(Nav::Confirm));
+    steps.push(nav(Nav::NextPage));
+    steps.push(Step::Wait(1000.0));
+    script(|_| Box::new(Title::new()), steps);
+}
+
+fn fast_autoplay(target: &str) {
+    // Safe: only the main thread is running at this point.
+    unsafe {
+        std::env::set_var("EUCHRE_AUTOPLAY", "1");
+        std::env::set_var("EUCHRE_TARGET", target);
+        std::env::set_var("EUCHRE_PROOF_SPEED", "12");
+        std::env::set_var("EUCHRE_SEED", "15");
+    }
+}
+
+/// A real game at the real table, bots and all, ends up in `stats.txt`.
+fn a_played_game_goes_on_the_record() {
+    fast_autoplay("3");
+    script(
+        |shared| Box::new(Table::new(shared)),
+        vec![
+            Step::Until("the game to finish", 900.0, Box::new(|h| h.shared.record.data.stats.games > 0)),
+            act(|h| {
+                let live = &h.shared.record.data;
+                let s = &live.stats;
+                if s.games != 1 || s.hands == 0 || s.tricks > s.hands * 5 {
+                    fail(format!("expected one game of some hands, got {s:?}"));
+                }
+                if s.points_for < 3 && s.points_against < 3 {
+                    fail(format!("somebody reached 3 points, but: {s:?}"));
+                }
+                if !live.is_unlocked(euchre::record::Achievement::FirstGame) {
+                    fail("finishing a game should earn PULL UP A CHAIR");
+                }
+                let disk = record::PlayerRecord::load().data;
+                if disk != *live {
+                    fail(format!("the file should match right away:\n{disk:?}\n{live:?}"));
+                }
+            }),
+            // The result banner moves on to the game over screen, which counts nothing new.
+            Step::Wait(30.0),
+            act(|h| {
+                if h.shared.record.data.stats.games != 1 {
+                    fail(format!("the same game was counted again: {:?}", h.shared.record.data.stats));
+                }
+            }),
+        ],
+    );
+}
+
+/// Walking out on a game keeps the hands you played, but it's neither a win nor a loss.
+fn leaving_mid_game_keeps_the_hands_but_not_the_game() {
+    fast_autoplay("10");
+    script(
+        |shared| Box::new(Table::new(shared)),
+        vec![
+            Step::Until("a hand to finish", 300.0, Box::new(|h| h.shared.record.data.stats.hands > 0)),
+            act(|h| {
+                let s = &h.shared.record.data.stats;
+                if s.games != 0 {
+                    fail(format!("no game was finished: {s:?}"));
+                }
+                let hands = s.hands;
+                let mut scene = h.scene.take().unwrap();
+                scene.suspend(&mut h.shared);
+                h.scene = Some(scene);
+                let disk = record::PlayerRecord::load().data;
+                if disk.stats.hands != hands || disk.stats.games != 0 {
+                    fail(format!("expected {hands} hands and no game on disk: {:?}", disk.stats));
+                }
+                // Coming back picks up at the next hand: nothing is counted twice.
+                let game = savegame::load().unwrap_or_else(|| fail("leaving should have saved the game"));
+                let shared = &h.shared;
+                h.scene = Some(Box::new(Table::resume(shared, game)));
+            }),
+            Step::Wait(1.0),
+            act(|h| {
+                let s = &h.shared.record.data.stats;
+                if s.games != 0 {
+                    fail(format!("resuming isn't finishing: {s:?}"));
                 }
             }),
         ],

@@ -21,7 +21,7 @@ use crate::savegame;
 use crate::scene::{NO_POINTER, Nav, Scene, Shared, Transition};
 use crate::scenes::lobby::Lobby;
 use crate::scenes::table::Table;
-use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel};
+use crate::scenes::{Overlay, options::OptionsPanel, rules::RulesPanel, trophies::TrophyPanel};
 use crate::sfx::Sound;
 use crate::text::Text;
 use crate::ui::{Button, Rect};
@@ -52,6 +52,7 @@ enum Choice {
     Learn,
     Options,
     Rules,
+    Trophies,
     Quit,
 }
 
@@ -187,20 +188,22 @@ fn mobile_buttons(saved: bool) -> Vec<(Choice, Button)> {
     let half = |y: f32, side: f32| Rect::centered(x + side * 61.0, y, 114.0, h);
     if saved {
         vec![
-            (Choice::Continue, Button::brass("CONTINUE", Rect::centered(x, 71.0, w, 50.0)).scaled(2.0)),
-            (Choice::Play, Button::red("NEW GAME", row(143.0)).scaled(1.5)),
-            (Choice::Online, online_button(row(194.0)).scaled(1.5)),
-            (Choice::Learn, Button::green("LEARN TO PLAY", row(245.0)).scaled(1.5)),
-            (Choice::Rules, Button::blue("RULES", half(296.0, -1.0)).scaled(1.5)),
-            (Choice::Options, Button::blue("OPTIONS", half(296.0, 1.0)).scaled(1.5)),
+            (Choice::Continue, Button::brass("CONTINUE", Rect::centered(x, 54.0, w, 50.0)).scaled(2.0)),
+            (Choice::Play, Button::red("NEW GAME", row(122.0)).scaled(1.5)),
+            (Choice::Online, online_button(row(168.0)).scaled(1.5)),
+            (Choice::Learn, Button::green("LEARN TO PLAY", row(214.0)).scaled(1.5)),
+            (Choice::Rules, Button::blue("RULES", half(260.0, -1.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", half(260.0, 1.0)).scaled(1.5)),
+            (Choice::Trophies, Button::blue("TROPHIES", row(306.0)).scaled(1.5)),
         ]
     } else {
         vec![
-            (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(x, 99.0, w, 52.0)).scaled(2.0)),
-            (Choice::Online, online_button(row(158.0)).scaled(1.5)),
-            (Choice::Learn, Button::green("LEARN TO PLAY", row(212.0)).scaled(1.5)),
-            (Choice::Rules, Button::blue("RULES", half(266.0, -1.0)).scaled(1.5)),
-            (Choice::Options, Button::blue("OPTIONS", half(266.0, 1.0)).scaled(1.5)),
+            (Choice::Play, Button::brass("DEAL ME IN", Rect::centered(x, 82.0, w, 52.0)).scaled(2.0)),
+            (Choice::Online, online_button(row(141.0)).scaled(1.5)),
+            (Choice::Learn, Button::green("LEARN TO PLAY", row(195.0)).scaled(1.5)),
+            (Choice::Rules, Button::blue("RULES", half(249.0, -1.0)).scaled(1.5)),
+            (Choice::Options, Button::blue("OPTIONS", half(249.0, 1.0)).scaled(1.5)),
+            (Choice::Trophies, Button::blue("TROPHIES", row(303.0)).scaled(1.5)),
         ]
     }
 }
@@ -256,7 +259,7 @@ impl Title {
         let letters = logo_lines().concat().chars().map(|_| Spring::new(0.0)).collect();
         // A single column of plaques under the logo.
         let w = 112.0;
-        // RULES and OPTIONS share a row, as wide as the plaque at the top.
+        // The small plaques share rows, as wide as the plaque at the top.
         let half = |y: f32, side: f32| Rect::centered(CX + side * 34.0, y, 66.0, 18.0);
         let buttons = if device::mobile() {
             mobile_buttons(saved.is_some())
@@ -270,7 +273,8 @@ impl Title {
                 (Choice::Learn, Button::green("LEARN TO PLAY", Rect::centered(CX, 288.0, w, 18.0))),
                 (Choice::Rules, Button::blue("RULES", half(311.0, -1.0))),
                 (Choice::Options, Button::blue("OPTIONS", half(311.0, 1.0))),
-                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 334.0, w, 18.0))),
+                (Choice::Trophies, Button::blue("TROPHIES", half(334.0, -1.0))),
+                (Choice::Quit, Button::grey("QUIT", half(334.0, 1.0))),
             ]
         } else {
             vec![
@@ -279,7 +283,8 @@ impl Title {
                 (Choice::Learn, Button::green("LEARN TO PLAY", Rect::centered(CX, 271.0, w, 18.0))),
                 (Choice::Rules, Button::blue("RULES", half(295.0, -1.0))),
                 (Choice::Options, Button::blue("OPTIONS", half(295.0, 1.0))),
-                (Choice::Quit, Button::grey("QUIT", Rect::centered(CX, 319.0, w, 18.0))),
+                (Choice::Trophies, Button::blue("TROPHIES", half(319.0, -1.0))),
+                (Choice::Quit, Button::grey("QUIT", half(319.0, 1.0))),
             ]
         };
         Title {
@@ -336,6 +341,10 @@ impl Title {
             Choice::Rules => {
                 shared.sfx.play(Sound::Pop);
                 self.overlay = Some(Overlay::Rules(Box::new(RulesPanel::new())));
+            }
+            Choice::Trophies => {
+                shared.sfx.play(Sound::Pop);
+                self.overlay = Some(Overlay::Trophies(Box::new(TrophyPanel::new())));
             }
             Choice::Quit => return Transition::Quit,
         }
@@ -593,13 +602,14 @@ impl Scene for Title {
                 self.focus = (self.focus as i32 + nav.dy()).rem_euclid(n) as usize;
                 shared.tick();
             }
-            // RULES and OPTIONS share a row.
-            Nav::Left | Nav::Right if matches!(self.buttons[self.focus].0, Choice::Rules | Choice::Options) => {
-                let want = |c: &Choice| if nav == Nav::Left { matches!(c, Choice::Rules) } else { matches!(c, Choice::Options) };
-                if let Some(i) = self.buttons.iter().position(|(c, _)| want(c))
-                    && i != self.focus
+            // The small plaques share rows.
+            Nav::Left | Nav::Right => {
+                let row = self.buttons[self.focus].1.rect.y;
+                let beside = self.focus as i32 + nav.dx();
+                if let Some((_, b)) = usize::try_from(beside).ok().and_then(|i| self.buttons.get(i))
+                    && b.rect.y == row
                 {
-                    self.focus = i;
+                    self.focus = beside as usize;
                     shared.tick();
                 }
             }
@@ -618,6 +628,16 @@ impl Scene for Title {
             _ => {}
         }
         Transition::None
+    }
+
+    fn debug_state(&self) -> String {
+        let open = match &self.overlay {
+            Some(Overlay::Options(_)) => "options",
+            Some(Overlay::Rules(_)) => "rules",
+            Some(Overlay::Trophies(_)) => "trophies",
+            None => "menu",
+        };
+        format!("title {open} focus {}", self.focus)
     }
 
     fn touch_pressed(&mut self, shared: &mut Shared, pos: Vec2) -> Transition {

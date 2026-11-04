@@ -13,9 +13,11 @@
 //! - `sfx`      procedural sound effects with pitch jitter, plus music
 //! - `juice`    springs and easing curves for animation
 //! - `settings` persisted player options
+//! - `record`   your stats and trophies on disk
 //! - `assets`   asset path resolution
 //! - `net`      where moves go: an in-process room (offline) or the online server
-//! - `platform` Steam (optional feature): names, invites, rich presence, join requests
+//! - `platform` Steam (optional feature): names, invites, rich presence, join requests;
+//!   Steam, Game Center or Play Games for trophies
 //! - `device`   phone or tablet? Picks the mobile layouts, and debug switches
 
 // A shipped Windows game opens a window, not a console behind it. Debug builds
@@ -31,6 +33,7 @@ mod juice;
 mod net;
 mod palette;
 mod platform;
+mod record;
 mod render;
 mod savegame;
 mod scene;

@@ -43,6 +43,7 @@ use love2drs::prelude::*;
 
 use crate::device;
 use crate::euchre::protocol::{ClientMsg, HandStart, KnockInfo, Move, SeatKind, SeatsInfo, ServerMsg};
+use crate::euchre::record::FinishedHand;
 use crate::euchre::{
     Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
 };
@@ -1111,6 +1112,7 @@ impl Table {
 
     fn show_result(&mut self, shared: &mut Shared) {
         let Some(result) = self.game.score_hand() else { return };
+        self.record_hand(shared);
         let r = &self.game.round;
         let maker_name = self.display_name(result.maker);
         let trump = r.trump.map(|t| t.symbol()).unwrap_or('?');
@@ -1161,6 +1163,28 @@ impl Table {
         } else {
             shared.sfx.play(if big { Sound::Womp } else { Sound::Pop });
         }
+    }
+
+    /// Counts the hand just scored towards your stats and trophies, and the game if it
+    /// ended here: leaving at the banner shouldn't lose it. The tutorial doesn't count.
+    fn record_hand(&self, shared: &mut Shared) {
+        if self.coach.is_some() {
+            return;
+        }
+        let game = match (self.link.room_code(), self.link.local_match()) {
+            (Some(code), _) => format!("online:{code}:{}", self.game.game),
+            (None, Some(m)) => format!("local:{}", m.id),
+            (None, None) => format!("online:{}", self.game.game),
+        };
+        shared.record.finish_hand(FinishedHand {
+            game: &game,
+            hand_number: self.game.hand_number,
+            round: &self.game.round,
+            scores: self.game.scores,
+            winner: self.game.winner(),
+            online: self.link.is_online(),
+            people: self.kinds.iter().filter(|&&k| k != SeatKind::Bot).count(),
+        });
     }
 
     fn continue_after_hand(&mut self, shared: &mut Shared) {

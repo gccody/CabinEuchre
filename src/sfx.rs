@@ -45,10 +45,12 @@ pub enum Sound {
     Fanfare,
     /// Bad news: we got euchred, defeat.
     Womp,
+    /// A trophy was earned.
+    Trophy,
 }
 
 impl Sound {
-    const ALL: [Sound; 15] = [
+    const ALL: [Sound; 16] = [
         Sound::Select,
         Sound::Hover,
         Sound::CardSlide,
@@ -64,6 +66,7 @@ impl Sound {
         Sound::Pop,
         Sound::Fanfare,
         Sound::Womp,
+        Sound::Trophy,
     ];
 
     /// Base volume and how much the pitch may randomly vary (fraction).
@@ -84,6 +87,7 @@ impl Sound {
             Sound::Pop => (0.5, 0.06),
             Sound::Fanfare => (0.6, 0.0),
             Sound::Womp => (0.6, 0.0),
+            Sound::Trophy => (0.55, 0.0),
         }
     }
 
@@ -104,6 +108,7 @@ impl Sound {
             Sound::Pop => tone(&[880.0, 1318.5], 0.07, Wave::Triangle, 0.16),
             Sound::Fanfare => tone(&[523.3, 659.3, 784.0, 1046.5, 1318.5, 1568.0], 0.66, Wave::Square, 0.11),
             Sound::Womp => sweep(330.0, 150.0, 0.6, Wave::Triangle, 0.22),
+            Sound::Trophy => tone(&[784.0, 1046.5, 1568.0, 2093.0], 0.42, Wave::Triangle, 0.17),
         }
     }
 }
