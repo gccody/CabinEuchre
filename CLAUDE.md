@@ -291,8 +291,13 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - **Store builds:** `cargo love2drs android package -p cabin-euchre --keystore upload.jks --key-alias upload
   --bundletool bundletool-all.jar` makes an `.aab` (password in `LOVE2DRS_KEYSTORE_PASS`), and on a Mac
   `cargo love2drs ios package -p cabin-euchre --identity NAME --profile PATH` makes an `.ipa` and `.dSYM`.
-  The iOS privacy manifest is generated and declares no data collection. If the App Store answers need
-  to say otherwise (online play sends a name and an address), write one and set `privacy_manifest`.
+  `ios/PrivacyInfo.xcprivacy` is the iOS privacy manifest. It has to match the App Store's privacy answers in
+  `store/listing.md`, and a new required-reason API has to be added to it by hand, since it replaces the generated one.
+- **Store listing:** `store/listing.md` has the text and answers, `tools/make_trophies.py` paints `store/trophies/`, and
+  `tools/store_screenshots.sh` renders `store/screenshots/` (not committed, about 40 MB). `docs/privacy.html` and
+  `docs/support.html` are published with GitHub Pages from `docs/`.
+- **Signing over SSH:** `codesign` fails with `errSecInternalComponent`, because the keychain is locked for SSH sessions.
+  Bootstrap the build as a temporary job with `launchctl bootstrap gui/$(id -u) job.plist` while someone's logged in on the Mac.
 - **Sound** is left to the framework: it pauses in the background and after an interruption, and it comes back
   by itself. On iOS it mixes with the player's music and obeys the silent switch (`AudioSession::Ambient`).
 - **Graphics:** Android uses Vulkan where there's a driver and OpenGL ES 3 otherwise. To test GLES, start an

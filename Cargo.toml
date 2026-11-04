@@ -1,6 +1,6 @@
 [package]
 name = "cabin-euchre"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 # The `if let` match guard in app.rs. 1.92 can't build it; 1.95 is the oldest checked.
 rust-version = "1.95"
@@ -14,6 +14,7 @@ name = "Cabin Euchre"
 orientation = "landscape"
 assets = ["assets/music/theme.ogg"]
 icon = "assets/icon.png"
+privacy_manifest = "ios/PrivacyInfo.xcprivacy"
 permissions = ["android.permission.INTERNET"]
 # Play Games trophies are off until the Play Console is set up (docs/achievements.md):
 # android_dependencies = ["com.google.android.gms:play-services-games-v2:22.1.0"]

@@ -53,7 +53,8 @@ set up before it will accept it, using the names and descriptions below.
 ## Setting up the stores
 
 The code is in place, but nothing reaches a store until these are done. Until then each build quietly keeps
-trophies locally. All three also need an icon for each trophy, which hasn't been drawn yet.
+trophies locally. The images are in `store/trophies/` (1024x1024, painted by `tools/make_trophies.py`), and `store/listing.md`
+has each trophy's Game Center points.
 
 ### Steam
 
@@ -73,6 +74,11 @@ achievements, so these report as unknown there.
 
 Game Center needs a real signed build to test. A simulator build has no entitlement, so GameKit
 says so in the log and the game carries on with local trophies.
+
+To test both directions on a phone: play a game (`EUCHRE_AUTOPLAY=1` and `EUCHRE_TARGET=1` in `euchre-debug.txt` make it
+quick), delete the app, reinstall it, launch it, and read `Documents/stats.txt` with `devicectl device copy from`. The
+trophies come back while `games` stays at 0. Anything earned this way stays on that account, and Game Center doesn't
+hide unreleased trophies from friends.
 
 ### Google Play Games
 
