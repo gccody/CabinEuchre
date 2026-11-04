@@ -15,6 +15,8 @@ orientation = "landscape"
 assets = ["assets/music/theme.ogg"]
 icon = "assets/icon.png"
 privacy_manifest = "ios/PrivacyInfo.xcprivacy"
+# A store won't take the same build number twice. Raise this for each upload of a version.
+version_code = 10001
 permissions = ["android.permission.INTERNET"]
 # Play Games trophies are off until the Play Console is set up (docs/achievements.md):
 # android_dependencies = ["com.google.android.gms:play-services-games-v2:22.1.0"]
