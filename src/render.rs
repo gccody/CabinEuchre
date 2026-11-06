@@ -24,6 +24,7 @@ use love2drs::prelude::*;
 use love2drs::window::{ReservedKind, ReservedRegion, Window};
 
 use crate::device;
+use crate::juice::approach;
 use crate::palette;
 use crate::ui::Rect;
 

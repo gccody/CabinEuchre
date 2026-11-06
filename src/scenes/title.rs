@@ -14,7 +14,7 @@ use love2drs::prelude::*;
 use crate::cards::Pose;
 use crate::device;
 use crate::euchre::{Card, Match, Rank, Suit};
-use crate::juice::{self, Spring};
+use crate::juice::{self, Spring, approach};
 use crate::palette;
 use crate::render::{VIEW_H, VIEW_W};
 use crate::savegame;

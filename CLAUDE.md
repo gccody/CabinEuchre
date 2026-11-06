@@ -70,6 +70,7 @@ the monitor's refresh rate.
 | `EUCHRE_WINDOW=WxH` | start with this window size, for previewing other screen shapes |
 | `EUCHRE_SAFE=l,t,r,b` | with `EUCHRE_MOBILE`, pretend the OS's bars and cutouts take this much of each edge (window units). A bottom of 24 is a gesture bar on screen, and the game centers above it |
 | `EUCHRE_RESERVE=n` | with `EUCHRE_MOBILE`, set aside n units at the bottom for a bar that isn't showing, as Android always does with 24 |
+| `EUCHRE_FPS_LOG=1` | log the frame rate every second to stderr, and how many of those frames were at the idle rate |
 | `EUCHRE_FOLD=left,right` | with `EUCHRE_MOBILE`, pretend a foldable is half open, with its fold between these window x positions |
 
 These only work in debug builds, except `EUCHRE_SERVER`, which any build reads. Nothing can set
@@ -86,7 +87,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | file | role |
 |---|---|
 | `src/main.rs` | window config, `love2drs::run` |
-| `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble) |
+| `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble), the idle frame cap |
 | `src/device.rs` | `mobile()`, which every phone and tablet branch goes through (always false on a desktop unless previewing), and `var()` for debug switches |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
 | `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), `record` (lifetime stats and trophies), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
@@ -329,6 +330,12 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 - **Motion** should never snap. Drive positions, scale and rotation with `juice::Spring` or the
   easing functions. Kick a spring (`impulse`) for feedback on every interaction. Keep it
   tasteful: small overshoot, short shakes only for euchres, marches and game over.
+- **Battery.** Once nothing has moved quickly for 0.75 s, the game draws 20 frames a second instead of
+  every refresh (`App::frame_cap`), and input wakes it at once. Springs, `juice::approach` and every sound
+  count as motion. Quick motion driven any other way (a shake, particles, a fast time-based ease) has to
+  call `juice::keep_awake()` while it runs, or it plays at 20 fps. Slow ambient motion (wobble, pulses,
+  the lamp) is fine at that rate. Use `juice::approach`, not love2drs's, for anything that moves.
+  `EUCHRE_FPS_LOG=1` shows what it's doing. Screenshot runs (`EUCHRE_FIXED_DT`) never cap.
 - **Every control is reachable without a mouse.** New buttons need a place in their scene's
   focus order and a `nav` path to them.
 - **Sound**: every interaction makes a sound. Add variants to `sfx::Sound` and play them via

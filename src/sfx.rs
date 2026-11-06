@@ -147,6 +147,8 @@ impl Sfx {
 
     /// Like [`Sfx::play`] but shifted by `pitch` (e.g. rising pitch for combos).
     pub fn play_pitched(&self, sound: Sound, pitch: f32) {
+        // Something just happened, and it usually comes with motion.
+        crate::juice::keep_awake();
         let Some((_, src)) = self.sources.iter().find(|(s, _)| *s == sound) else {
             return;
         };

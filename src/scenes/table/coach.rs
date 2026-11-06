@@ -20,7 +20,7 @@ use love2drs::prelude::*;
 use crate::device;
 use crate::euchre::advice::{self, Verdict};
 use crate::euchre::{Action, Card, Mirror, Phase, Round, Seat, team_of};
-use crate::juice::Spring;
+use crate::juice::{Spring, approach};
 use crate::palette;
 use crate::scene::{Nav, Shared, Transition};
 use crate::scenes::title::Title;
@@ -987,6 +987,9 @@ impl Table {
             n.age += dt;
             n.pop.update(dt);
             n.shake = (n.shake - dt * 3.0).max(0.0);
+            if n.shake > 0.0 {
+                crate::juice::keep_awake();
+            }
             if n.closing {
                 n.fade = (n.fade - dt * 7.0).max(0.0);
             } else if !paused {

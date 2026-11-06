@@ -5,7 +5,7 @@
 use love2drs::prelude::*;
 
 use crate::device;
-use crate::juice::Spring;
+use crate::juice::{Spring, approach};
 use crate::render::DENSITY;
 use crate::palette;
 use crate::sfx::{Sfx, Sound};

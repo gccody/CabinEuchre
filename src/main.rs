@@ -57,6 +57,8 @@ fn main() -> love2drs::Result {
     let conf = Conf::new("Cabin Euchre")
         .size(w, h)
         .resizable(true)
+        // A card game doesn't need a laptop's graphics card, and the integrated GPU uses far less power.
+        .low_power(true)
         .min_size(render::VIEW_W, render::VIEW_H);
     love2drs::run(conf, app::App::new)
 }

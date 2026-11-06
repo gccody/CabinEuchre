@@ -1,6 +1,41 @@
 //! Animation helpers. The presentation leans heavily on overshooting springs
 //! and wobble, so everything that moves (cards, text, buttons) should go
 //! through these rather than snapping.
+//!
+//! They also notice motion: a spring or [`approach`] that's still on its way
+//! calls [`keep_awake`], and the app draws at the full frame rate until things
+//! settle (see `app::frame_cap`). Other quick motion (a shake, flying particles)
+//! calls it too. Slow ambient motion (wobble, pulses, the lamp) doesn't, and
+//! plays fine at the idle rate.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static AWAKE: AtomicBool = AtomicBool::new(false);
+
+/// Something on screen is moving quickly this frame, so the next few frames
+/// should be drawn at the full rate.
+pub fn keep_awake() {
+    AWAKE.store(true, Ordering::Relaxed);
+}
+
+/// Whether anything called [`keep_awake`] since the last call, and starts over.
+pub fn take_awake() -> bool {
+    AWAKE.swap(false, Ordering::Relaxed)
+}
+
+/// Closer than this to the target, at slower than [`REST_SPEED`], a spring is
+/// at rest. Small enough that what's left can't be seen in pixels, scale or radians.
+const REST_DISTANCE: f32 = 0.002;
+const REST_SPEED: f32 = 0.02;
+
+/// [`love2drs::math::approach`], noticing motion: eases `current` toward `target`.
+pub fn approach(current: f32, target: f32, rate: f32, dt: f32) -> f32 {
+    let next = love2drs::math::approach(current, target, rate, dt);
+    if (next - target).abs() > REST_DISTANCE {
+        keep_awake();
+    }
+    next
+}
 
 /// A damped spring that chases `target`. Kick it with [`Spring::impulse`] for
 /// "pop" feedback.
@@ -38,6 +73,9 @@ impl Spring {
             let accel = (self.target - self.value) * self.stiffness - self.velocity * self.damping;
             self.velocity += accel * h;
             self.value += self.velocity * h;
+        }
+        if (self.target - self.value).abs() > REST_DISTANCE || self.velocity.abs() > REST_SPEED {
+            keep_awake();
         }
     }
 }

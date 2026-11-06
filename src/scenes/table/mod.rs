@@ -47,7 +47,7 @@ use crate::euchre::record::FinishedHand;
 use crate::euchre::{
     Action, Card, HandResult, Match, Mirror, Phase, ResultKind, RuleError, Seat, Suit, ai, partner_of, team_of,
 };
-use crate::juice::Spring;
+use crate::juice::{self, Spring, approach};
 use crate::net::{Link, LocalTable, Status, seat_memory};
 use crate::palette;
 use crate::savegame;
@@ -1670,6 +1670,9 @@ impl Table {
             *t += dt;
         }
         self.shake = (self.shake - dt * 2.5).max(0.0);
+        if self.shake > 0.0 || !self.particles.is_empty() {
+            juice::keep_awake();
+        }
         for p in &mut self.particles {
             p.vel.y += 160.0 * dt;
             p.vel *= 1.0 - 1.5 * dt;

@@ -13,6 +13,7 @@ use love2drs::prelude::*;
 
 use crate::cards::CardArt;
 use crate::device;
+use crate::juice;
 use crate::palette;
 use crate::record::PlayerRecord;
 use crate::render::{Renderer, VIEW_H, VIEW_W};
@@ -32,6 +33,13 @@ const REPEAT_DELAY: f32 = 0.38;
 const REPEAT_EVERY: f32 = 0.11;
 /// Mouse travel (logical px) that switches back to mouse mode.
 const MOUSE_WAKE: f32 = 6.0;
+/// Frames a second once nothing moves quickly: plenty for the lamp's sway, the
+/// dust and the gentle pulses, and a third of the work of 60. A third of 60 and a
+/// sixth of 120, so frames stay evenly spaced on the usual displays.
+const IDLE_FPS: f32 = 20.0;
+/// How long things must have been still before the frame rate drops, so the
+/// tail of a motion and the short gaps in a sequence stay smooth.
+const SETTLE_TIME: f32 = 0.75;
 
 pub struct App {
     renderer: Renderer,
@@ -71,6 +79,11 @@ pub struct App {
     /// What the motors are doing now: `(low, high, seconds left)`, so a quick
     /// click during a long rumble adds to it instead of cutting it short.
     buzzing: (f32, f32, f32),
+    /// Seconds since anything moved quickly (see [`App::frame_cap`]).
+    still_for: f32,
+    /// Debug: `EUCHRE_FPS_LOG=1` logs the frame rate every second, and how
+    /// much of it was capped: `(frames, capped frames, seconds)` so far.
+    fps_log: Option<(u32, u32, f32)>,
 }
 
 /// Auto-repeat for a held direction.
@@ -186,6 +199,8 @@ impl App {
             pad_active: false,
             pending_buzz: Vec::new(),
             buzzing: (0.0, 0.0, 0.0),
+            still_for: 0.0,
+            fps_log: device::var("EUCHRE_FPS_LOG").map(|_| (0, 0, 0.0)),
             fixed_dt: device::var("EUCHRE_FIXED_DT")
                 .and_then(|v| v.parse::<f32>().ok())
                 .map(|n| n / 60.0),
@@ -309,6 +324,29 @@ impl App {
         self.banners.update(&mut self.shared, dt);
     }
 
+    /// Draws at the display's full rate while anything moves quickly (springs,
+    /// eases, shakes, a finger or button held, a sound just played), and drops
+    /// to [`IDLE_FPS`] once it has all been still for [`SETTLE_TIME`]. That's what
+    /// saves the battery: the table spends most of its time waiting on someone.
+    /// Input wakes the loop at once (love2drs does that), and whatever it moves
+    /// lifts the cap from the next frame on.
+    fn frame_cap(&mut self, ctx: &mut Context, real_dt: f32) {
+        let moving = juice::take_awake() || self.fade > 0.0 || self.shared.mouse_down;
+        self.still_for = if moving { 0.0 } else { self.still_for + real_dt };
+        // Screenshots and soak runs step a fixed time per frame: no reason to wait.
+        let idle = self.still_for > SETTLE_TIME && self.fixed_dt.is_none();
+        ctx.timer.set_max_fps(idle.then_some(IDLE_FPS));
+        if let Some((frames, capped, seconds)) = &mut self.fps_log {
+            *frames += 1;
+            *capped += u32::from(idle);
+            *seconds += real_dt;
+            if *seconds >= 1.0 {
+                eprintln!("[euchre] {frames} frames in {seconds:.2} s, {capped} of them at the idle rate");
+                self.fps_log = Some((0, 0, 0.0));
+            }
+        }
+    }
+
     fn sync_settings(&mut self, ctx: &mut Context) {
         let s = &mut self.shared.settings;
         ctx.audio.set_volume(s.volume);
@@ -343,6 +381,7 @@ impl Game for App {
         self.apply(ctx, t);
         self.follow_trophies(dt);
         self.play_rumble(ctx, real_dt);
+        self.frame_cap(ctx, real_dt);
     }
 
     fn draw(&mut self, ctx: &mut Context) {
