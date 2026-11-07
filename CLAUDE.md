@@ -336,6 +336,12 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   call `juice::keep_awake()` while it runs, or it plays at 20 fps. Slow ambient motion (wobble, pulses,
   the lamp) is fine at that rate. Use `juice::approach`, not love2drs's, for anything that moves.
   `EUCHRE_FPS_LOG=1` shows what it's doing. Screenshot runs (`EUCHRE_FIXED_DT`) never cap.
+  Measured on the iPhone Duo (Power Profiler, 3 min each, debug builds): left at a prompt, power impact went
+  from 12.0 to about 1.5 (CPU 80% to 9%). With autoplay it went from 15.8 to 4.5, once love2drs stopped iOS
+  spinning between frames. To measure: start the game with `xcrun devicectl device process launch -e '{...}'`
+  (debug switches as JSON) and record it with `xcrun xctrace record --template "Power Profiler" --device UDID
+  --attach PID`. Run both from the GUI session (the signing note below), and keep Xcode open: Instruments
+  only sees the phone while it is. The phone charges over USB, so read the per-process impact, not battery %.
 - **Every control is reachable without a mouse.** New buttons need a place in their scene's
   focus order and a `nav` path to them.
 - **Sound**: every interaction makes a sound. Add variants to `sfx::Sound` and play them via
