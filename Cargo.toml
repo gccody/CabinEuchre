@@ -37,6 +37,9 @@ serde_json = "1"
 # Windows, macOS, Linux, Android and iOS without system OpenSSL).
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Lets that thread sleep until the server says something or the player moves,
+# rather than waking 30 times a second to look (epoll, kqueue or IOCP underneath).
+polling = "3"
 # Steam builds only (`cargo build --features steam`): names, invites, rich presence.
 steamworks = { version = "0.13", optional = true }
 

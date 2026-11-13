@@ -95,7 +95,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
 | `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), `record` (lifetime stats and trophies), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
-| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `Link::Tutorial` is a `TutorialRoom` (the lessons); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
+| `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `Link::Tutorial` is a `TutorialRoom` (the lessons); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token, asleep until the server or the game has something for it); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
 | `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). Also trophies on Steam, Game Center (`game_center.rs`) and Play Games (`play_games.rs`). No-ops without them |
 | `src/scenes/lobby.rs` | PLAY ONLINE: host or join, an on-screen keyboard for codes and names, the seated view (code tiles, private/public, seats, LET IN / NO, DEAL (host only), INVITE, LEAVE), waiting for the host after a knock. Hands the link to the table once the room deals |
 | `src/scenes/title.rs` | logo, a fan of the four jacks (click to flip), main menu |
@@ -232,6 +232,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   `server/wrangler.toml`, `allowed` in the server). Cloudflare counts approximately, so live it only
   stops heavy bursts (about 190 a minute got through), and `wrangler dev` is exact, so test it live. Requests to join at
   one table are capped at `MAX_KNOCKS`.
+- **The network thread sleeps between messages** (`Watch` in `online.rs`, on the `polling` crate), so waiting for
+  someone's move costs nothing. Whatever hands it a command has to go through `Connection::command`, which wakes it:
+  a command sent straight down the channel would sit there until the next ping. `cargo test live_server -- --ignored`
+  runs a conversation over TLS against the live server, which no other test does.
 - Closing the game on purpose sends `Leave`. Being killed doesn't, so the seat stays for a while,
   and PLAY ONLINE offers REJOIN TABLE. Typing the same code again finds the same seat too.
 - Online tables differ only a little: the result banner moves on by itself after 7 s, PLAY AGAIN
