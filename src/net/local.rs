@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 
 use crate::euchre::Match;
+use crate::euchre::ai::Difficulty;
 use crate::euchre::protocol::{ClientMsg, PROTOCOL_VERSION, ServerMsg};
 use crate::euchre::room::Room;
 
@@ -15,23 +16,29 @@ pub struct LocalTable {
 }
 
 impl LocalTable {
-    /// A new game, shuffled from `seed`.
-    pub fn new(target: u32, stick_the_dealer: bool, seed: u64) -> LocalTable {
-        let mut t = LocalTable::seated(target, stick_the_dealer, seed);
+    /// A new game, shuffled from `seed`, against bots of this `difficulty`.
+    pub fn new(target: u32, stick_the_dealer: bool, difficulty: Difficulty, seed: u64) -> LocalTable {
+        let mut t = LocalTable::seated(target, stick_the_dealer, difficulty, seed);
         t.send(ClientMsg::Start);
         t
     }
 
-    /// Picks a saved game back up.
-    pub fn resume(game: Match) -> LocalTable {
-        let mut t = LocalTable::seated(game.target, game.stick_the_dealer, game.id);
+    /// Picks a saved game back up. The bots play at today's `difficulty`: the save doesn't keep one.
+    pub fn resume(game: Match, difficulty: Difficulty) -> LocalTable {
+        let mut t = LocalTable::seated(game.target, game.stick_the_dealer, difficulty, game.id);
         t.room.set_game(game);
         t.pump();
         t
     }
 
-    fn seated(target: u32, stick_the_dealer: bool, seed: u64) -> LocalTable {
+    /// The Difficulty option changed: the bots play that way from their next move.
+    pub fn set_difficulty(&mut self, difficulty: Difficulty) {
+        self.room.set_difficulty(difficulty);
+    }
+
+    fn seated(target: u32, stick_the_dealer: bool, difficulty: Difficulty, seed: u64) -> LocalTable {
         let mut room = Room::new("LOCAL", "", target, stick_the_dealer);
+        room.set_difficulty(difficulty);
         room.join(PROTOCOL_VERSION, "YOU", None, "local").expect("an empty room has seats");
         let mut t = LocalTable { room, inbox: VecDeque::new(), seed };
         t.pump();

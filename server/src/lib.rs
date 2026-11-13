@@ -28,6 +28,7 @@ use std::cell::RefCell;
 use euchre_core::protocol::{
     CLOSE_REPLACED, ClientMsg, ErrorCode, PROTOCOL_VERSION, ServerMsg, clean_code, clean_handle, make_code,
 };
+use euchre_core::ai::Difficulty;
 use euchre_core::room::{AWAY_SEAT_MS, Occupant, Room, RoomSnapshot, TurnClock};
 use serde::{Deserialize, Serialize};
 use worker::*;
@@ -327,11 +328,14 @@ impl DurableObject for EuchreRoom {
             }
             let target = param("target").and_then(|t| t.parse().ok()).unwrap_or(10u32).clamp(1, 99);
             let stick = param("stick").is_none_or(|s| s != "0");
+            let bots = param("bots").and_then(|b| Difficulty::parse(&b)).unwrap_or_default();
             let now = Date::now().as_millis() as f64;
             // Friends see this object's id, never the code.
             let handle = self.state.id().to_string();
+            let mut room = Room::new(&code, &handle, target, stick);
+            room.set_difficulty(bots);
             let saved = Saved {
-                room: Room::new(&code, &handle, target, stick).snapshot(),
+                room: room.snapshot(),
                 clock: None,
                 away: [None; 4],
                 last_active: now,

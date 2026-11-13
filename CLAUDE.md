@@ -6,7 +6,7 @@ mat, brass-trimmed walnut panels, a paper score pad, and springy feedback with p
 (lively, but deliberately not over the top).
 
 **Status: complete and playable.** Title screen, full rules (bidding rounds, bowers, going alone,
-stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats, results and
+stick the dealer, scoring to 5/7/10), heuristic AI for the three other seats at five difficulty levels, results and
 game-over screens, pause menu, save & quit with CONTINUE on the title, options (persisted), an
 illustrated How to Play, LEARN TO PLAY, a scripted match where Benny teaches you the game, and a trophy
 shelf with lifetime stats. Plays with mouse, keyboard, touchscreen or gamepad. Runs on Windows,
@@ -35,6 +35,7 @@ cargo test --test scene_checks # the real scenes and network client, in real win
 cargo clippy --all-targets     # keep it warning-free (also with --features steam)
 cd server && npx wrangler dev  # the room server on ws://127.0.0.1:8787 (see server/README.md)
 cargo run -p euchre-core --example netcheck -- ws://127.0.0.1:8787 3   # play a game against it
+cargo run -p euchre-core --release --example bots   # how often each difficulty wins, and what a move costs
 LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   # render one frame to PNG and exit
 cargo love2drs android run -p cabin-euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
 cargo love2drs ios build -p cabin-euchre                  # on a Mac: builds the .app for the simulator
@@ -93,7 +94,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/app.rs` | the `Game` impl: owns `Renderer`, `Shared` and the active `Scene`, applies settings each frame, global hotkeys, scene fade, input routing (touch, gamepad, d-pad/stick auto-repeat, rumble), the idle frame cap |
 | `src/device.rs` | `mobile()`, which every phone and tablet branch goes through (always false on a desktop unless previewing), and `var()` for debug switches |
 | `src/scene.rs` | `Scene` trait, `Shared` resources (font, card art, sfx, settings, time, design-space pointer, input mode), `Nav`, `Transition` |
-| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), `record` (lifetime stats and trophies), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
+| `core/` | the `euchre-core` crate (imported as `crate::euchre`). **Pure rules, no love2drs or I/O**, so it also builds for the wasm server: `card` (suits, ranks, bower-aware `power`), `round` (one hand's state machine), `game` (`Match` to N points, logs each hand's steps), `save` (text snapshot of a match, replayed on load), `ai` (heuristics, and the `Difficulty` levels), `rng`, `advice` (what a good player would do here, and why), `tutorial` (the scripted deals and bots), `record` (lifetime stats and trophies), and online play: `protocol` (JSON messages), `room` (four seats around the real match), `mirror` (a player's view with unseen cards guessed). `online_tests.rs` plays whole games between a room and simulated players |
 | `server/` | the room server: a Rust Cloudflare Worker, one Durable Object per room code (its own cargo workspace, built for wasm by `worker-build`). See `server/README.md` |
 | `src/net/` | `Link`: where the table's moves go. `local.rs` runs a `Room` in-process with three bots (offline play); `Link::Tutorial` is a `TutorialRoom` (the lessons); `online.rs` is the WebSocket client on a background thread (rustls, reconnects with its seat token, asleep until the server or the game has something for it); `seat_memory.rs` keeps that token on disk, so REJOIN works after the game was killed, and locks it so a second copy of the game gets a seat of its own |
 | `src/platform/` | Steam behind the `steam` feature (`steam.rs`): player name, rich presence `connect` (`+knock HANDLE`), the invite dialog (`+connect CODE`), join requests (command line or the overlay). Also trophies on Steam, Game Center (`game_center.rs`) and Play Games (`play_games.rs`). No-ops without them |
@@ -150,6 +151,26 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   works out every card's place from the round (`settled_places`) and deals them back out. To
   screenshot a resume, point `APPDATA` at a scratch folder holding `CabinEuchre\savegame.txt` and use
   `EUCHRE_SCENE=continue` (screenshot mode exits without `Game::quit`, so it never saves).
+
+### Bots and difficulty
+
+- **Five levels** (`ai::Difficulty`: Rookie, Easy, Medium, Hard, Expert), picked with the Difficulty option
+  (`difficulty=` in the settings). Each is a row of numbers in `ai::SKILLS`: how badly it misjudges its hand,
+  how often it plays a wrong card, whether it counts cards, and for Expert, reading voids, leading aces and
+  going alone sooner. To tune one, change its row and run the `bots` example, which prints how often a
+  Hard-strength player wins at each level, how two of each do against two Hard bots, and the time per move.
+- **Hard never changes.** It is how the bots played before there were levels, and `ai::choose` (the tutorial's
+  bots, its advice, autoplay) is Hard. The test `hard_plays_as_it_always_has` holds a hash of its moves, so
+  a change meant for another level can't move the tutorial or the screenshots.
+- **No search and no dice.** Every level is about a microsecond a move: bots run on phones and in the
+  Cloudflare Worker. A weaker bot's mistakes come from a hash of what its seat can see (`ai::chance`), so a
+  game still replays from its seed and the room keeps no RNG.
+- **A person's partner never plays below `ai::PARTNER_FLOOR`** (Hard), by `room::bot_level`. With every bot
+  at Rookie, a good player's partner loses about what the other team gives away (63% wins); with the floor
+  it's 75%.
+- **Where the level comes from:** offline, the option, live (`Table::update` passes it to `LocalTable`), so
+  it isn't in the save. Online, the host's option when the table is made (`/create?...&bots=rookie`), kept
+  in the `RoomSnapshot`.
 
 ### How the tutorial works
 
@@ -418,5 +439,5 @@ other game's) sprites, shaders, sounds or other files.
 - Public quick-match (an extra Durable Object as a queue), once enough people play online.
 - Verified identities (Steam auth tickets checked by the server) if rankings ever matter.
 
-- Smarter AI (card counting for voids, better lone-hand judgment), difficulty levels.
+- A stronger Expert: it beats Hard 57 games in 100, and sampling the hidden hands would do better, at a cost per move.
 - Optional house rules: defending alone, "farmer's hand", no-trump.

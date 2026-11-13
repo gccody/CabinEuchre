@@ -181,9 +181,10 @@ impl Lobby {
         let name = shared.settings.player_name();
         // A new room plays by the host's options.
         let create_query = format!(
-            "?target={}&stick={}",
+            "?target={}&stick={}&bots={}",
             shared.settings.target,
-            u8::from(shared.settings.stick_the_dealer)
+            u8::from(shared.settings.stick_the_dealer),
+            shared.settings.difficulty.key()
         );
         self.link = Some(Link::Online(Connection::open(join, &name, &create_query)));
         self.seats = None;

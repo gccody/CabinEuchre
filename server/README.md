@@ -14,7 +14,7 @@ every change, and runs one alarm per room for turn timeouts and clean-up.
 
 | route | what |
 |---|---|
-| `GET /create?target=10&stick=1` | WebSocket: open a new room (random 6-letter code) with those rules |
+| `GET /create?target=10&stick=1&bots=hard` | WebSocket: open a new room (random 6-letter code) with those rules. `bots` is how well the computer plays: `rookie`, `easy`, `medium`, `hard` (when left out) or `expert` |
 | `GET /join/{CODE}` | WebSocket: join or rejoin a room. The code is the invitation |
 | `GET /knock/{HANDLE}` | WebSocket: ask to join a room by its handle |
 | `GET /` | a plain-text hello |

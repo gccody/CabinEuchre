@@ -308,14 +308,14 @@ impl Table {
         let target = crate::device::var("EUCHRE_TARGET")
             .and_then(|t| t.parse().ok())
             .unwrap_or(s.target);
-        let link = Link::Local(Box::new(LocalTable::new(target, s.stick_the_dealer, seed)));
+        let link = Link::Local(Box::new(LocalTable::new(target, s.stick_the_dealer, s.difficulty, seed)));
         Table::join(shared, link, None, VecDeque::new())
             .unwrap_or_else(|_| panic!("an offline game deals at once"))
     }
 
     /// Picks a saved offline game back up where it was left.
     pub fn resume(shared: &Shared, game: Match) -> Self {
-        let link = Link::Local(Box::new(LocalTable::resume(game)));
+        let link = Link::Local(Box::new(LocalTable::resume(game, shared.settings.difficulty)));
         Table::join(shared, link, None, VecDeque::new())
             .unwrap_or_else(|_| panic!("a resumed game sends its hand at once"))
     }
@@ -1756,6 +1756,10 @@ fn explain(e: RuleError, r: &crate::euchre::Round) -> String {
 impl Scene for Table {
     fn update(&mut self, shared: &mut Shared, _ctx: &mut Context, dt: f32) -> Transition {
         self.delay = shared.settings.delay_factor();
+        // Offline, the Difficulty option works at once, even in the middle of a hand.
+        if let Link::Local(local) = &mut self.link {
+            local.set_difficulty(shared.settings.difficulty);
+        }
         self.pump_link(shared);
         self.follow_fold();
         if let Some(o) = &mut self.overlay {

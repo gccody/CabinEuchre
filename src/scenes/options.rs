@@ -8,6 +8,7 @@
 use love2drs::prelude::*;
 
 use crate::device;
+use crate::euchre::ai::Difficulty;
 use crate::juice::Spring;
 use crate::palette;
 use crate::scene::{Nav, Shared};
@@ -22,24 +23,26 @@ enum Opt {
     Music,
     Atmosphere,
     Speed,
+    Difficulty,
     Target,
     Stick,
     Fullscreen,
     Rumble,
 }
 
-const OPTS: [Opt; 8] = [
+const OPTS: [Opt; 9] = [
     Opt::Volume,
     Opt::Music,
     Opt::Atmosphere,
     Opt::Speed,
+    Opt::Difficulty,
     Opt::Target,
     Opt::Stick,
     Opt::Fullscreen,
     Opt::Rumble,
 ];
 
-const PANEL: Rect = Rect::new(140.0, 40.0, 360.0, 280.0);
+const PANEL: Rect = Rect::new(140.0, 28.0, 360.0, 304.0);
 /// On a phone the panel fills the screen: two columns of rows tall enough for fingers.
 const MOBILE_PANEL: Rect = Rect::new(14.0, 10.0, 612.0, 340.0);
 const ROW_Y: f32 = PANEL.y + 46.0;
@@ -88,8 +91,8 @@ impl OptionsPanel {
             .enumerate()
             .map(|(i, &opt)| {
                 let (y, inset, label_x, ctrl_x, ctrl_w) = if mobile {
-                    // Sliders on the left, the rest on the right.
-                    let (col_x, row) = if i < 3 { (26.0, i) } else { (328.0, i - 3) };
+                    // Sound, light and pace on the left, the game itself on the right.
+                    let (col_x, row) = if i < 4 { (26.0, i) } else { (328.0, i - 4) };
                     let y = 84.0 + row as f32 * 52.0;
                     (y, Rect::new(col_x, y - 23.0, 286.0, 46.0), col_x + 10.0, col_x + 132.0, 144.0)
                 } else {
@@ -335,6 +338,7 @@ fn label(opt: Opt) -> &'static str {
         Opt::Music => "Music",
         Opt::Atmosphere => "Atmosphere",
         Opt::Speed => "Game speed",
+        Opt::Difficulty => "Difficulty",
         Opt::Target => "Points to win",
         Opt::Stick => "Stick the dealer",
         Opt::Fullscreen => "Fullscreen",
@@ -357,6 +361,7 @@ fn value_text(opt: Opt, s: &Settings) -> String {
         Opt::Music => percent(s.music),
         Opt::Atmosphere => percent(s.atmosphere),
         Opt::Speed => SPEED_NAMES[s.speed].into(),
+        Opt::Difficulty => s.difficulty.name().into(),
         Opt::Target => s.target.to_string(),
         Opt::Stick => on_off(s.stick_the_dealer),
         Opt::Fullscreen => on_off(s.fullscreen),
@@ -393,6 +398,7 @@ fn step(opt: Opt, s: &mut Settings, dir: i32, wrap: bool) -> bool {
     let before = s.clone();
     match opt {
         Opt::Speed => s.speed = next(s.speed, SPEED_NAMES.len()),
+        Opt::Difficulty => s.difficulty = Difficulty::ALL[next(s.difficulty.index(), Difficulty::ALL.len())],
         Opt::Target => {
             let i = TARGETS.iter().position(|&t| t == s.target).unwrap_or(2);
             s.target = TARGETS[next(i, TARGETS.len())];

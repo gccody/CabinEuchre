@@ -123,7 +123,7 @@ pub struct Connection {
 
 impl Connection {
     /// Starts connecting in the background. `create_query` (such as
-    /// `?target=10&stick=1`) sets up a new room's game.
+    /// `?target=10&stick=1&bots=hard`) sets up a new room's game.
     pub fn open(join: Join, name: &str, create_query: &str) -> Connection {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();

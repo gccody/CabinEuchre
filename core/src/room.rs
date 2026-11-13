@@ -29,13 +29,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ai;
+use crate::ai::{self, Difficulty, Standing};
 use crate::game::Match;
 use crate::protocol::{
     ClientMsg, ErrorCode, HandStart, KnockInfo, Move, PROTOCOL_VERSION, SeatInfo, SeatKind, SeatsInfo, ServerMsg,
     Shown, clean_name,
 };
-use crate::round::{Phase, Seat, team_of};
+use crate::round::{Phase, Seat, partner_of, team_of};
 use crate::save::LoadError;
 
 /// Computer players' names, by absolute seat.
@@ -132,6 +132,8 @@ pub struct Room {
     game_no: u32,
     target: u32,
     stick_the_dealer: bool,
+    /// How well the bots play (see [`bot_level`]).
+    difficulty: Difficulty,
     /// Counts every move, so a turn timer can tell whether the turn it was
     /// set for is still the one being waited on.
     moves: u64,
@@ -162,6 +164,8 @@ pub struct RoomSnapshot {
     pub game_no: u32,
     pub target: u32,
     pub stick_the_dealer: bool,
+    #[serde(default)]
+    pub difficulty: Difficulty,
     pub moves: u64,
     #[serde(default)]
     pub public: bool,
@@ -177,6 +181,15 @@ fn rel(to: Seat, seat: Seat) -> Seat {
     (seat + 4 - to) % 4
 }
 
+/// How well a bot plays `seat`: at the table's level, or at least
+/// [`ai::PARTNER_FLOOR`] when a person is counting on it as their partner.
+pub(crate) fn bot_level(seats: &[Occupant; 4], table: Difficulty, seat: Seat) -> Difficulty {
+    match seats[partner_of(seat)] {
+        Occupant::Human { .. } => table.as_partner(),
+        Occupant::Bot => table,
+    }
+}
+
 impl Room {
     /// A new, private room. `handle` is what friends will see (any string
     /// for a room nobody can reach by handle, like an offline game).
@@ -189,6 +202,7 @@ impl Room {
             game_no: 0,
             target: target.max(1),
             stick_the_dealer,
+            difficulty: Difficulty::default(),
             moves: 0,
             public: false,
             host: None,
@@ -209,6 +223,7 @@ impl Room {
             game_no: self.game_no,
             target: self.target,
             stick_the_dealer: self.stick_the_dealer,
+            difficulty: self.difficulty,
             moves: self.moves,
             public: self.public,
             host: self.host,
@@ -238,6 +253,7 @@ impl Room {
             game_no: s.game_no,
             target: s.target.max(1),
             stick_the_dealer: s.stick_the_dealer,
+            difficulty: s.difficulty,
             moves: s.moves,
             public: s.public,
             host: s.host,
@@ -268,6 +284,15 @@ impl Room {
 
     pub fn is_public(&self) -> bool {
         self.public
+    }
+
+    pub fn difficulty(&self) -> Difficulty {
+        self.difficulty
+    }
+
+    /// Sets how well the bots play, from their next move on.
+    pub fn set_difficulty(&mut self, level: Difficulty) {
+        self.difficulty = level;
     }
 
     pub fn host(&self) -> Option<Seat> {
@@ -590,8 +615,9 @@ impl Room {
         if k != key {
             return false;
         }
+        let level = bot_level(&self.seats, self.difficulty, seat);
         let m = self.game.as_mut().expect("waiting on a move");
-        let action = ai::choose(&m.round, seat);
+        let action = ai::choose_at(&m.round, seat, level, Standing { scores: m.scores, target: m.target });
         if m.apply(seat, action).is_err() {
             return false;
         }
@@ -648,7 +674,9 @@ impl Room {
                     if self.seats[seat] != Occupant::Bot && !self.waiting[seat] {
                         return;
                     }
-                    let action = ai::choose(&m.round, seat);
+                    let level = bot_level(&self.seats, self.difficulty, seat);
+                    let standing = Standing { scores: m.scores, target: m.target };
+                    let action = ai::choose_at(&m.round, seat, level, standing);
                     if let Err(e) = m.apply(seat, action) {
                         debug_assert!(false, "bot move refused: {e:?}");
                         return;

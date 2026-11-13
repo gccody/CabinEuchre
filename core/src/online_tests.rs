@@ -8,11 +8,11 @@
 
 use std::collections::VecDeque;
 
-use crate::ai;
+use crate::ai::{self, Difficulty, PARTNER_FLOOR};
 use crate::mirror::{ME, Mirror};
 use crate::protocol::{ClientMsg, ErrorCode, PROTOCOL_VERSION, SeatKind, SeatsInfo, ServerMsg, Shown};
 use crate::rng::Rng;
-use crate::room::{Occupant, Room};
+use crate::room::{Occupant, Room, RoomSnapshot, bot_level};
 use crate::round::{Phase, Seat, team_of};
 
 struct Player {
@@ -113,6 +113,8 @@ fn check(room: &Room, p: &Player) {
 fn simulate(seed: u64, humans: usize, chaos: bool) -> u32 {
     let mut rng = Rng::new(seed);
     let mut room = Room::new("TESTS", "tests", 5, seed.is_multiple_of(2));
+    // Every level of bot gets its turn at these tables, mistakes and all.
+    room.set_difficulty(Difficulty::ALL[(seed % 5) as usize]);
     let mut players: Vec<Player> = Vec::new();
     for i in 0..humans {
         let token = format!("token-{i}");
@@ -565,4 +567,28 @@ fn abandoned_seats_go_back_to_bots() {
     // The table has room again, and the old token just gets a new seat if one's free.
     assert_eq!(room.join(PROTOCOL_VERSION, "eve", None, "e").unwrap(), dee);
     assert_eq!(room.join(PROTOCOL_VERSION, "dee", Some("d"), "dd"), Err(ErrorCode::RoomFull));
+}
+
+#[test]
+fn a_persons_partner_never_plays_below_the_floor() {
+    let mut room = Room::new("SKILL", "handle", 10, true);
+    assert_eq!(room.difficulty(), Difficulty::Hard, "a room nobody set up plays as rooms always have");
+    room.set_difficulty(Difficulty::Rookie);
+    let ann = room.join(PROTOCOL_VERSION, "ann", None, "a").unwrap();
+    let level = |room: &Room, seat| bot_level(room.seats(), room.difficulty(), seat);
+    assert_eq!(level(&room, (ann + 1) % 4), Difficulty::Rookie);
+    assert_eq!(level(&room, (ann + 2) % 4), PARTNER_FLOOR, "ann's partner");
+    assert_eq!(level(&room, (ann + 3) % 4), Difficulty::Rookie);
+
+    // An expert table's bots are experts whoever they sit across from.
+    room.set_difficulty(Difficulty::Expert);
+    assert!((0..4).all(|seat| level(&room, seat) == Difficulty::Expert));
+
+    // The level is stored with the room, and a room stored before there were levels plays Hard.
+    let snapshot = room.snapshot();
+    assert_eq!(Room::restore(snapshot.clone()).unwrap().difficulty(), Difficulty::Expert);
+    let mut json = serde_json::to_value(&snapshot).unwrap();
+    json.as_object_mut().unwrap().remove("difficulty");
+    let old: RoomSnapshot = serde_json::from_value(json).unwrap();
+    assert_eq!(Room::restore(old).unwrap().difficulty(), Difficulty::Hard);
 }

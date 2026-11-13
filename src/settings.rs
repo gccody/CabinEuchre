@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use crate::euchre::ai::Difficulty;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     /// Master volume, 0..=1.
@@ -17,6 +19,8 @@ pub struct Settings {
     pub stick_the_dealer: bool,
     /// Points needed to win a game.
     pub target: u32,
+    /// How well the computer players play, offline and at tables you host.
+    pub difficulty: Difficulty,
     pub fullscreen: bool,
     /// Controller rumble: clicks on selections and focus moves, the shuffle and
     /// deal, and big moments (euchres, marches, game over).
@@ -53,6 +57,7 @@ impl Default for Settings {
             speed: 1,
             stick_the_dealer: true,
             target: 10,
+            difficulty: Difficulty::default(),
             fullscreen: false,
             rumble: true,
             name: String::new(),
@@ -117,6 +122,7 @@ impl Settings {
                 "speed" => s.speed = v.parse().unwrap_or(s.speed).min(2),
                 "stick_the_dealer" => s.stick_the_dealer = b,
                 "target" => s.target = v.parse().ok().filter(|t| TARGETS.contains(t)).unwrap_or(s.target),
+                "difficulty" => s.difficulty = Difficulty::parse(v).unwrap_or(s.difficulty),
                 "fullscreen" => s.fullscreen = b,
                 "rumble" => s.rumble = b,
                 "name" if !v.is_empty() => s.name = crate::euchre::protocol::clean_name(v),
@@ -137,13 +143,14 @@ impl Settings {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\nfullscreen={}\nrumble={}\nname={}\ntutorial_done={}\nlesson={}\n",
+            "volume={}\nmusic={}\natmosphere={}\nspeed={}\nstick_the_dealer={}\ntarget={}\ndifficulty={}\nfullscreen={}\nrumble={}\nname={}\ntutorial_done={}\nlesson={}\n",
             self.volume,
             self.music,
             self.atmosphere,
             self.speed,
             self.stick_the_dealer,
             self.target,
+            self.difficulty.key(),
             self.fullscreen,
             self.rumble,
             self.name,
