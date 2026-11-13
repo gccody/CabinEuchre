@@ -9,6 +9,9 @@
 //
 // Shapes (rectangles, circles) have a constant `uv`, so `fwidth` is zero and
 // they are sampled unchanged.
+//
+// Drawn straight to the window, the color also gets the lamplight grade
+// (grade.wgsl, appended to this file).
 
 fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, screen: vec2<f32>) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(t));
@@ -19,5 +22,11 @@ fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, scree
     let smooth_texel = seam + clamp((texel - seam) / max(fw, vec2<f32>(1e-5)), vec2<f32>(-0.5), vec2<f32>(0.5));
     let is_shape = fw.x < 1e-6 && fw.y < 1e-6;
     let suv = select(smooth_texel / size, uv, is_shape);
-    return textureSample(t, s, suv) * color;
+    let c = textureSample(t, s, suv) * color;
+    // Much of a sprite's quad is see-through (a card's corners, the gaps in a
+    // letter), and there's nothing there to grade.
+    if (c.a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(grade_here(c.rgb, screen), c.a);
 }

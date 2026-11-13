@@ -11,6 +11,13 @@
 //   data[8]    = the design-space rect the canvas shows (x, y, w, h): 640x360 on
 //                a desktop, the whole screen on a phone
 //   data[9].xy = the texel the target's first pixel is (render::table_texels)
+//   data[10]   = (lamplight strength 0..1, 1 to grade here, -, -)
+//
+// When this is laid straight under the scene in the window, the lamplight's warm
+// tint and vignette (grade.wgsl, appended to this file) are worked out here too:
+// they change no faster than the table does, so there's no need to do them again
+// for every window pixel of every frame. The color's luma from before the grade
+// goes out in alpha, for the grain that table.wgsl adds per pixel.
 //
 // Drawn as one rectangle over a canvas with one pixel per texel, so `uv` is
 // ignored and `screen` picks the texel. render.rs stretches that canvas over the
@@ -135,5 +142,11 @@ fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, scree
     let mote = step(max(md.x, md.y), 0.7) * step(0.6, h) * twinkle * smoothstep(0.35, 0.9, light);
     col = col + lamp * mote * 0.18;
 
-    return vec4<f32>(col, 1.0) * color;
+    let grading = uniforms.data[10];
+    if (grading.y < 0.5) {
+        return vec4<f32>(col, 1.0) * color;
+    }
+    let luma = grade_luma(col);
+    let graded = grade_warm(col, luma, grading.x, lamp) * grade_vignette((p - view.xy) / view.zw, grading.x);
+    return vec4<f32>(graded, luma);
 }

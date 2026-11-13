@@ -1,24 +1,28 @@
 //! The render pipeline every scene draws through:
 //!
 //! 1. Scenes draw in a fixed `VIEW_W x VIEW_H` (640x360) "design space".
-//! 2. That space is rendered into a canvas at the window's own resolution
+//! 2. That space is drawn straight into the window at its own resolution
 //!    (letterboxed to 16:9), so rotated and scaled things have smooth edges.
 //!    Pixel art (cards, suit icons, the font) is authored at `DENSITY` texels
 //!    per design pixel and drawn through `shaders/pixel.wgsl`, which keeps
 //!    texels chunky but anti-aliases their edges at any scale or rotation.
-//! 3. The canvas starts each frame with the cabin tabletop (`background.wgsl`):
-//!    walnut planks, a felt mat and a slowly swaying lamp. It's as chunky as the
-//!    pixel art, so it's worked out once per texel into a small canvas, which
-//!    `table.wgsl` lays over the big one (on a phone, a tenth of the shader work).
+//! 3. Each frame starts with the cabin tabletop (`background.wgsl`): walnut
+//!    planks, a felt mat and a slowly swaying lamp. It's as chunky as the pixel
+//!    art, so it's worked out once per texel into a small canvas, which
+//!    `table.wgsl` lays under the scene (on a phone, a tenth of the shader work).
 //!    The lamp and the dust drift slowly, so that small canvas is only redrawn
 //!    [`TABLE_FPS`] times a second, however fast the display is.
-//! 4. The canvas is drawn to the window through the lamplight post-process
-//!    (`lamplight.wgsl`): warm grade, vignette and film grain.
+//! 4. Everything drawn gets the lamplight grade (`grade.wgsl`: warm grade,
+//!    vignette and film grain) in its own shader, so a frame is one pass over
+//!    the window rather than a scene canvas and a pass to grade it.
+//! 5. A window with fewer pixels than the pixel art has texels (under 960x540)
+//!    is the exception: there the scene goes into a canvas at `DENSITY`, which
+//!    `lamplight.wgsl` shrinks and grades on its way to the window.
 //!
 //! Use [`View::to_design`] to convert mouse positions into design space.
 //!
 //! On phones the design space sits inside the OS's safe area (clear of notches
-//! and the gesture bar) instead of being letterboxed, and the canvas covers
+//! and the gesture bar) instead of being letterboxed, and the view covers
 //! the whole screen, so the tabletop runs edge to edge. [`bounds`] says how
 //! far past 640x360 the player can see and reach, so the table can spread out.
 
@@ -39,8 +43,6 @@ pub const VIEW_H: u32 = 360;
 /// Pixel-art texels per design pixel (cards, suit icons and the font are
 /// authored at this density).
 pub const DENSITY: f32 = 1.5;
-/// Largest canvas width, to bound memory on huge displays.
-const MAX_CANVAS_W: f32 = 3840.0;
 /// How often the tabletop is worked out again. Its fastest motion is the lamp's
 /// pool of light at under 12 texels a second, so no texel changes more often.
 const TABLE_FPS: f32 = 30.0;
@@ -114,14 +116,14 @@ fn fold_in(regions: &[ReservedRegion], view: &View) -> Option<(f32, f32)> {
     Some((design(region.x), design(region.x + region.width)))
 }
 
-/// Where the design space and canvas land in the window this frame.
+/// Where the design space lands in the window this frame.
 #[derive(Debug, Clone, Copy)]
 pub struct View {
     /// Window position of the design space's origin.
     pub offset: Vec2,
     /// Window pixels per design pixel.
     pub scale: f32,
-    /// The part of design space the canvas covers: 640x360 on a desktop, the
+    /// The part of design space that is drawn: 640x360 on a desktop, the
     /// whole screen on a phone.
     pub visible: Rect,
 }
@@ -152,7 +154,7 @@ impl View {
         (clear.top + (usable_h - VIEW_H as f32 * scale) / 2.0).floor()
     }
 
-    /// Phone: the design space at this scale and height, with the canvas covering
+    /// Phone: the design space at this scale and height, with the view covering
     /// the whole screen. The returned bounds stay out of the `reserved` margins.
     fn placed(window_w: f32, window_h: f32, reserved: Margins, scale: f32, y: f32) -> (Self, Rect) {
         let Margins { side, top, bottom } = reserved;
@@ -169,13 +171,16 @@ impl View {
     }
 }
 
-/// Canvas size in pixels for a view: the physical size of the visible area,
-/// but never below `DENSITY` (so pixel art is never minified).
-fn canvas_size(view: View, dpi: f32) -> (u32, u32) {
-    // The limit wins over DENSITY only for absurdly wide windows, which then get a
-    // canvas wider than MAX_CANVAS_W rather than a crash.
-    let density = (view.scale * dpi).clamp(DENSITY, (MAX_CANVAS_W / view.visible.w).max(DENSITY));
-    ((view.visible.w * density).round() as u32, (view.visible.h * density).round() as u32)
+/// Whether a view has at least a window pixel for every texel of the pixel art,
+/// so the scene can be drawn straight into the window.
+fn fits_window(view: View, dpi: f32) -> bool {
+    view.scale * dpi >= DENSITY
+}
+
+/// The scene canvas's size in pixels for a view that doesn't fit the window:
+/// `DENSITY` pixels per design pixel, so pixel art is never minified.
+fn canvas_size(view: View) -> (u32, u32) {
+    ((view.visible.w * DENSITY).round() as u32, (view.visible.h * DENSITY).round() as u32)
 }
 
 /// How far the OS's bars and cutouts reach into a phone's screen, in window units.
@@ -306,7 +311,9 @@ fn view_for(w: f32, h: f32, window: &Window, placement: &mut Placement, dt: f32)
 }
 
 pub struct Renderer {
-    canvas: Canvas,
+    /// What the scene is drawn into when the window is too small for it (see
+    /// [`fits_window`]). `None` otherwise, which is nearly always.
+    canvas: Option<Canvas>,
     /// The tabletop at one pixel per texel (see [`table_texels`]).
     table: Canvas,
     /// What `table` was last drawn for, or `None` if it has to be drawn.
@@ -314,11 +321,11 @@ pub struct Renderer {
     /// Which [`TABLE_FPS`] step `time` is in.
     table_step: f32,
     background: Shader,
-    /// Lays `table` over the canvas.
+    /// Lays `table` under the scene.
     table_blit: Shader,
     lamplight: Shader,
     pixel: Shader,
-    /// 0 = post-process off, 1 = full effect. Driven by the Atmosphere option.
+    /// 0 = lamplight grade off, 1 = full effect. Driven by the Atmosphere option.
     pub atmosphere: f32,
     view: View,
     placement: Placement,
@@ -326,22 +333,26 @@ pub struct Renderer {
     last_time: f32,
 }
 
+/// A shader that takes part in the lamplight grade, which is appended to it.
+fn graded_shader(g: &mut Graphics, effect: &str) -> Result<Shader> {
+    g.new_shader(&format!("{effect}\n{}", include_str!("shaders/grade.wgsl")))
+}
+
 impl Renderer {
     pub fn new(g: &mut Graphics, window: &Window) -> Result<Self> {
         let (w, h) = g.dimensions();
         let mut placement = Placement::default();
         let view = view_for(w, h, window, &mut placement, 0.0);
-        let (cw, ch) = canvas_size(view, g.dpi_scale());
         let (_, (tw, th)) = table_texels(view.visible);
         Ok(Renderer {
-            canvas: new_canvas(g, cw, ch),
+            canvas: None,
             table: new_table_canvas(g, tw, th),
             table_drawn: None,
             table_step: 0.0,
-            background: g.new_shader(include_str!("shaders/background.wgsl"))?,
-            table_blit: g.new_shader(include_str!("shaders/table.wgsl"))?,
-            lamplight: g.new_shader(include_str!("shaders/lamplight.wgsl"))?,
-            pixel: g.new_shader(include_str!("shaders/pixel.wgsl"))?,
+            background: graded_shader(g, include_str!("shaders/background.wgsl"))?,
+            table_blit: graded_shader(g, include_str!("shaders/table.wgsl"))?,
+            lamplight: graded_shader(g, include_str!("shaders/lamplight.wgsl"))?,
+            pixel: graded_shader(g, include_str!("shaders/pixel.wgsl"))?,
             atmosphere: 1.0,
             view,
             placement,
@@ -359,8 +370,6 @@ impl Renderer {
         let dt = (time - self.last_time).max(0.0);
         self.last_time = time;
         self.view = view_for(w, h, window, &mut self.placement, dt);
-        let (cw, ch) = canvas_size(self.view, g.dpi_scale());
-        let (cw, ch) = (cw as f32, ch as f32);
         self.background.send(0, [time, 0.0, 0.0, 0.0]);
         // The quarter step keeps a time that lands right on a step (as every other
         // frame of a fixed-step screenshot run does) on the same side of it each time.
@@ -379,54 +388,132 @@ impl Renderer {
         }
         let v = self.view.visible;
         self.background.send(8, [v.x, v.y, v.w, v.h]);
-        self.lamplight.send(0, [time, cw, ch, self.atmosphere]);
-        // Physical window pixels per canvas pixel, for the sharp-bilinear sampler.
-        let px_scale = self.view.scale * g.dpi_scale() / (cw / self.view.visible.w);
-        self.lamplight.send(1, [px_scale, 0.0, 0.0, 0.0]);
-        self.lamplight.send(2, palette::LAMP);
     }
 
-    /// Runs `draw_scene` in design space on top of the background, then
-    /// presents the result to the window through the lamplight shader.
+    /// Runs `draw_scene` in design space on top of the tabletop, lit by the lamp.
     pub fn frame(&mut self, g: &mut Graphics, draw_scene: impl FnOnce(&mut Graphics)) {
         if !device::mobile() {
             let (w, h) = g.dimensions();
             self.view = View::fit(w, h);
         }
-        let (cw, ch) = canvas_size(self.view, g.dpi_scale());
-        if self.canvas.dimensions() != (cw, ch) {
-            self.canvas = new_canvas(g, cw, ch);
+        let direct = fits_window(self.view, g.dpi_scale());
+        self.draw_table(g, direct);
+        g.set_background_color(Color::BLACK);
+        if direct {
+            self.canvas = None;
+            self.draw_to_window(g, draw_scene);
+        } else {
+            self.draw_through_canvas(g, draw_scene);
         }
+    }
+
+    /// Redraws the tabletop's canvas if it's due, and tells `table.wgsl` about it.
+    /// `graded` bakes the lamplight's warm tint and vignette into it, for laying it
+    /// straight into the window.
+    fn draw_table(&mut self, g: &mut Graphics, graded: bool) {
         let visible = self.view.visible;
-        let density = cw as f32 / visible.w;
         let (first, (tw, th)) = table_texels(visible);
         if self.table.dimensions() != (tw, th) {
             self.table = new_table_canvas(g, tw, th);
             self.table_drawn = None;
         }
-        let key = TableKey { step: self.table_step, visible: [visible.x, visible.y, visible.w, visible.h] };
-        let (background, table_blit, pixel, table) = (&self.background, &self.table_blit, &self.pixel, &self.table);
+        let key = TableKey {
+            step: self.table_step,
+            visible: [visible.x, visible.y, visible.w, visible.h],
+            graded: graded.then_some(self.atmosphere),
+        };
         if self.table_drawn != Some(key) {
             self.table_drawn = Some(key);
+            let background = &self.background;
             background.send(9, [first.x, first.y, 0.0, 0.0]);
-            g.with_canvas(table, |g| {
+            background.send(10, [self.atmosphere, if graded { 1.0 } else { 0.0 }, 0.0, 0.0]);
+            g.with_canvas(&self.table, |g| {
                 // Cleared rather than loaded: every pixel is drawn, and a phone's GPU
                 // would otherwise fetch the old ones first.
                 g.clear(palette::WOOD_DARK);
+                g.push_all();
+                // Alpha carries the luma, so it's written rather than blended with.
+                g.set_blend_mode(BlendMode::Replace);
                 g.set_shader(Some(background));
                 g.set_color(Color::WHITE);
                 g.rectangle(Fill, 0.0, 0.0, tw as f32, th as f32);
-                g.set_shader(None);
+                g.pop();
             });
         }
-        table_blit.send(0, [cw as f32, ch as f32, first.x, first.y]);
-        table_blit.send(1, [visible.x, visible.y, visible.w, visible.h]);
-        table_blit.send(2, [tw as f32 - 1.0, th as f32 - 1.0, 0.0, 0.0]);
-        g.with_canvas(&self.canvas, |g| {
+        self.table_blit.send(1, [visible.x, visible.y, visible.w, visible.h]);
+        self.table_blit.send(2, [tw as f32 - 1.0, th as f32 - 1.0, 0.0, 0.0]);
+    }
+
+    /// Tells the shaders that draw the scene whether to grade it themselves, and
+    /// where the view is in the window (`origin` and `size`, in pixels).
+    fn send_grade(&self, here: bool, origin: Vec2, size: Vec2) {
+        // The grain changes 12 times a second.
+        let grain = (self.last_time * 12.0).floor();
+        for shader in [&self.table_blit, &self.pixel] {
+            shader.send(12, [grain, self.atmosphere, if here { 1.0 } else { 0.0 }, 0.0]);
+            shader.send(13, [origin.x, origin.y, size.x, size.y]);
+            shader.send(14, palette::LAMP);
+        }
+    }
+
+    /// The usual way: the tabletop and the scene go straight into the window, each
+    /// draw grading its own color.
+    fn draw_to_window(&mut self, g: &mut Graphics, draw_scene: impl FnOnce(&mut Graphics)) {
+        let dpi = g.dpi_scale();
+        let visible = self.view.visible;
+        let (first, (tw, th)) = table_texels(visible);
+        // Window pixels per design pixel, and the view's rect in window pixels. It
+        // starts on a whole pixel, so the pixel art's texels land where a canvas's would.
+        let density = self.view.scale * dpi;
+        let origin = ((self.view.offset + vec2(visible.x, visible.y) * self.view.scale) * dpi).round();
+        let size = vec2(visible.w, visible.h) * density;
+        self.send_grade(true, origin, size);
+        self.table_blit.send(0, [size.x, size.y, first.x, first.y]);
+        self.table_blit.send(3, [origin.x, origin.y, 0.0, 0.0]);
+
+        // The same rect in the window's own units, which is what drawing takes.
+        let (at, extent) = (origin / dpi, size / dpi);
+        g.push_all();
+        // Design space can be drawn past its edges (a card flying in), and on a
+        // desktop the window can be wider or taller than the view.
+        g.set_scissor(at.x, at.y, extent.x, extent.y);
+        g.set_color(Color::WHITE);
+        g.set_shader(Some(&self.table_blit));
+        g.draw_ex(&self.table, DrawParams::at(at.x, at.y).scale_xy(extent.x / tw as f32, extent.y / th as f32));
+        g.set_shader(Some(&self.pixel));
+        g.translate(at.x, at.y);
+        g.scale(density / dpi, density / dpi);
+        g.translate(-visible.x, -visible.y);
+        draw_scene(g);
+        g.pop();
+    }
+
+    /// A window too small for the pixel art: the scene goes into a canvas at
+    /// `DENSITY`, which the lamplight shader shrinks and grades into the window.
+    fn draw_through_canvas(&mut self, g: &mut Graphics, draw_scene: impl FnOnce(&mut Graphics)) {
+        let visible = self.view.visible;
+        let (cw, ch) = canvas_size(self.view);
+        if self.canvas.as_ref().is_none_or(|c| c.dimensions() != (cw, ch)) {
+            self.canvas = Some(new_canvas(g, cw, ch));
+        }
+        let Some(canvas) = &self.canvas else { return };
+        let (first, (tw, th)) = table_texels(visible);
+        let (cw, ch) = (cw as f32, ch as f32);
+        let density = cw / visible.w;
+        self.send_grade(false, Vec2::ZERO, vec2(cw, ch));
+        self.table_blit.send(0, [cw, ch, first.x, first.y]);
+        self.table_blit.send(3, [0.0; 4]);
+        self.lamplight.send(0, [self.last_time, cw, ch, self.atmosphere]);
+        // Physical window pixels per canvas pixel, for the sharp-bilinear sampler.
+        self.lamplight.send(1, [self.view.scale * g.dpi_scale() / density, 0.0, 0.0, 0.0]);
+        self.lamplight.send(2, palette::LAMP);
+
+        let (table_blit, pixel, table) = (&self.table_blit, &self.pixel, &self.table);
+        g.with_canvas(canvas, |g| {
             g.clear(palette::WOOD_DARK);
             g.set_color(Color::WHITE);
             g.set_shader(Some(table_blit));
-            g.draw_ex(table, DrawParams::at(0.0, 0.0).scale_xy(cw as f32 / tw as f32, ch as f32 / th as f32));
+            g.draw_ex(table, DrawParams::at(0.0, 0.0).scale_xy(cw / tw as f32, ch / th as f32));
             g.push_all();
             g.set_shader(Some(pixel));
             g.scale(density, density);
@@ -436,11 +523,10 @@ impl Renderer {
             g.set_shader(None);
         });
 
-        g.set_background_color(Color::BLACK);
         g.set_color(Color::WHITE);
         g.set_shader(Some(&self.lamplight));
         let at = self.view.offset + vec2(visible.x, visible.y) * self.view.scale;
-        g.draw_ex(&self.canvas, DrawParams::at(at.x, at.y).scale(self.view.scale / density));
+        g.draw_ex(canvas, DrawParams::at(at.x, at.y).scale(self.view.scale / density));
         g.set_shader(None);
     }
 }
@@ -450,6 +536,8 @@ impl Renderer {
 struct TableKey {
     step: f32,
     visible: [f32; 4],
+    /// The lamplight strength graded into it, if it is.
+    graded: Option<f32>,
 }
 
 /// The tabletop's texels that cover the visible part of design space: the first

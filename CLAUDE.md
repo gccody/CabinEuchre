@@ -101,8 +101,8 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scenes/table/coach.rs`, `coach_draw.rs`, `lessons.rs` | the tutorial on top of the table: what happens when and what's allowed; Benny's note, chapter cards, glove and report; and everything he says |
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
 | `src/scenes/trophies.rs` | the trophy shelf (an overlay on the title: your numbers, then every trophy) and the banner for a new trophy, which the app draws over every scene |
-| `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, tabletop background, lamplight present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
-| `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `table.wgsl` (lays that tabletop over the scene canvas), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
+| `src/render.rs` | 640x360 design space drawn straight into the window at its own resolution, in one pass: the tabletop, then the scene, every draw lit by the lamplight grade. `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
+| `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `table.wgsl` (lays that tabletop under the scene), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw), `grade.wgsl` (the lamplight grade, appended to the others) and `lamplight.wgsl` (grades a whole canvas, for windows under 960x540). Loaded with `include_str!` |
 | `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is `UNIT` (4/3) design px at scale 1 |
 | `src/cards.rs` | procedural pixel-art card atlas (faces, court portraits, back) and white suit icons; `Pose`. Painted at `DENSITY`, drawn at `1/DENSITY`. Atlases are linear-filtered and every quad has a 1-texel transparent border (`cards::bordered`) so `pixel.wgsl` can smooth sprite outlines |
 | `src/suits.rs` | suit shapes: math masks at any size, plus hand-drawn 11 and 13 px masks so small clubs and spades stay distinct |
@@ -273,7 +273,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   pixel by pixel. It catches what the eye won't: `background.wgsl` keeps literal numbers for the exact
   640x360 view, because the mat's edges land exactly on their thresholds and computing them from a
   uniform moved the right-hand stitches by a texel.
-- **View.** On mobile the 640x360 design space is scaled to fit the safe area, and the canvas covers the
+- **View.** On mobile the 640x360 design space is scaled to fit the safe area, and the view covers the
   whole screen, so the tabletop runs full-bleed behind the notch and the bars. `render::bounds()` is the
   safe area in design coordinates. It can reach outside 640x360, so edge-anchored things (hand, MENU,
   score pad, trump medallion) use it. Anything drawn across the whole screen, like `ui::dim_screen`, has
@@ -338,9 +338,17 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   the lamp) is fine at that rate. Use `juice::approach`, not love2drs's, for anything that moves.
   `EUCHRE_FPS_LOG=1` shows what it's doing. Screenshot runs (`EUCHRE_FIXED_DT`) never cap.
 - **The tabletop is drawn 30 times a second** (`render::TABLE_FPS`), into a canvas of one pixel per texel
-  that `table.wgsl` lays over the scene. It's the costliest shader, and nothing in it moves faster than
+  that `table.wgsl` lays under the scene. It's the costliest shader, and nothing in it moves faster than
   that shows. With `EUCHRE_FIXED_DT=1` it's redrawn on even frames, so compare screenshots of even frames:
   on an odd one the lamp and dust are a 60th of a second behind the old pictures.
+- **A frame is one pass over the window.** There's no scene canvas and no post-process: `pixel.wgsl` grades
+  each draw's color itself (`grade_here` in `grade.wgsl`), and the tabletop has the warm tint and vignette
+  worked into it per texel, with only the grain added per window pixel. So everything a scene draws has to go
+  through the shader the renderer set: a scene that sets its own shader, or draws into a canvas and then
+  shows it, has to grade it too. Only a window with less than a pixel per texel (under 960x540) still draws
+  into a canvas that `lamplight.wgsl` grades (`Renderer::draw_through_canvas`); check both after changing
+  either, e.g. with `EUCHRE_WINDOW=800x450`. Blending graded colors rather than grading the blend moves
+  see-through pixels by at most 4/255.
 - **Measure, don't guess:** `LOVE2DRS_FRAME_LOG=1` works in any build. Fewer wakeups, fewer passes and
   less busy time are all less power.
   Measured on the iPhone Duo (Power Profiler, 3 min each, debug builds): left at a prompt, power impact went
@@ -371,9 +379,8 @@ other game's) sprites, shaders, sounds or other files.
   a stitched edge, snapped to the pixel-art texel grid. A pendant lamp sways very slowly; its
   light falls off in ordered-dither (Bayer) bands, and a few dust motes drift through the beam.
   Colors are the `WOOD*`, `FELT*` and `LAMP` palette constants.
-- Lamplight pass (`lamplight.wgsl`): sharp-bilinear upscale, warm grade, oval vignette, fine film
-  grain at 12 fps. Strength is the "Atmosphere" slider in Options (saved as `atmosphere`; the
-  old `crt` key is still read).
+- Lamplight (`grade.wgsl`): warm grade, oval vignette, fine film grain at 12 fps. Strength is the
+  "Atmosphere" slider in Options (saved as `atmosphere`; the old `crt` key is still read).
 - UI: chamfered (cut-corner) shapes via `ui::chamfer`, thick dark outlines, brass trim. Panels
   are walnut with a brass rim, inner hairline and corner studs. Buttons are beveled plaques over a
   darker lip. The primary action is brass with engraved dark lettering (`Button::brass`); others
