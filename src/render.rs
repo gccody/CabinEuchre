@@ -7,7 +7,11 @@
 //!    per design pixel and drawn through `shaders/pixel.wgsl`, which keeps
 //!    texels chunky but anti-aliases their edges at any scale or rotation.
 //! 3. The canvas starts each frame with the cabin tabletop (`background.wgsl`):
-//!    walnut planks, a felt mat and a slowly swaying lamp.
+//!    walnut planks, a felt mat and a slowly swaying lamp. It's as chunky as the
+//!    pixel art, so it's worked out once per texel into a small canvas, which
+//!    `table.wgsl` lays over the big one (on a phone, a tenth of the shader work).
+//!    The lamp and the dust drift slowly, so that small canvas is only redrawn
+//!    [`TABLE_FPS`] times a second, however fast the display is.
 //! 4. The canvas is drawn to the window through the lamplight post-process
 //!    (`lamplight.wgsl`): warm grade, vignette and film grain.
 //!
@@ -37,6 +41,9 @@ pub const VIEW_H: u32 = 360;
 pub const DENSITY: f32 = 1.5;
 /// Largest canvas width, to bound memory on huge displays.
 const MAX_CANVAS_W: f32 = 3840.0;
+/// How often the tabletop is worked out again. Its fastest motion is the lamp's
+/// pool of light at under 12 texels a second, so no texel changes more often.
+const TABLE_FPS: f32 = 30.0;
 
 /// The whole design space: everything the player sees on a desktop.
 const DESIGN_RECT: Rect = Rect::new(0.0, 0.0, VIEW_W as f32, VIEW_H as f32);
@@ -300,7 +307,15 @@ fn view_for(w: f32, h: f32, window: &Window, placement: &mut Placement, dt: f32)
 
 pub struct Renderer {
     canvas: Canvas,
+    /// The tabletop at one pixel per texel (see [`table_texels`]).
+    table: Canvas,
+    /// What `table` was last drawn for, or `None` if it has to be drawn.
+    table_drawn: Option<TableKey>,
+    /// Which [`TABLE_FPS`] step `time` is in.
+    table_step: f32,
     background: Shader,
+    /// Lays `table` over the canvas.
+    table_blit: Shader,
     lamplight: Shader,
     pixel: Shader,
     /// 0 = post-process off, 1 = full effect. Driven by the Atmosphere option.
@@ -317,9 +332,14 @@ impl Renderer {
         let mut placement = Placement::default();
         let view = view_for(w, h, window, &mut placement, 0.0);
         let (cw, ch) = canvas_size(view, g.dpi_scale());
+        let (_, (tw, th)) = table_texels(view.visible);
         Ok(Renderer {
             canvas: new_canvas(g, cw, ch),
+            table: new_table_canvas(g, tw, th),
+            table_drawn: None,
+            table_step: 0.0,
             background: g.new_shader(include_str!("shaders/background.wgsl"))?,
+            table_blit: g.new_shader(include_str!("shaders/table.wgsl"))?,
             lamplight: g.new_shader(include_str!("shaders/lamplight.wgsl"))?,
             pixel: g.new_shader(include_str!("shaders/pixel.wgsl"))?,
             atmosphere: 1.0,
@@ -341,7 +361,10 @@ impl Renderer {
         self.view = view_for(w, h, window, &mut self.placement, dt);
         let (cw, ch) = canvas_size(self.view, g.dpi_scale());
         let (cw, ch) = (cw as f32, ch as f32);
-        self.background.send(0, [time, cw, ch, 0.0]);
+        self.background.send(0, [time, 0.0, 0.0, 0.0]);
+        // The quarter step keeps a time that lands right on a step (as every other
+        // frame of a fixed-step screenshot run does) on the same side of it each time.
+        self.table_step = (time * TABLE_FPS + 0.25).floor();
         let colors = [
             palette::WOOD_DARK,
             palette::WOOD,
@@ -376,13 +399,34 @@ impl Renderer {
         }
         let visible = self.view.visible;
         let density = cw as f32 / visible.w;
-
-        let (background, pixel) = (&self.background, &self.pixel);
+        let (first, (tw, th)) = table_texels(visible);
+        if self.table.dimensions() != (tw, th) {
+            self.table = new_table_canvas(g, tw, th);
+            self.table_drawn = None;
+        }
+        let key = TableKey { step: self.table_step, visible: [visible.x, visible.y, visible.w, visible.h] };
+        let (background, table_blit, pixel, table) = (&self.background, &self.table_blit, &self.pixel, &self.table);
+        if self.table_drawn != Some(key) {
+            self.table_drawn = Some(key);
+            background.send(9, [first.x, first.y, 0.0, 0.0]);
+            g.with_canvas(table, |g| {
+                // Cleared rather than loaded: every pixel is drawn, and a phone's GPU
+                // would otherwise fetch the old ones first.
+                g.clear(palette::WOOD_DARK);
+                g.set_shader(Some(background));
+                g.set_color(Color::WHITE);
+                g.rectangle(Fill, 0.0, 0.0, tw as f32, th as f32);
+                g.set_shader(None);
+            });
+        }
+        table_blit.send(0, [cw as f32, ch as f32, first.x, first.y]);
+        table_blit.send(1, [visible.x, visible.y, visible.w, visible.h]);
+        table_blit.send(2, [tw as f32 - 1.0, th as f32 - 1.0, 0.0, 0.0]);
         g.with_canvas(&self.canvas, |g| {
             g.clear(palette::WOOD_DARK);
-            g.set_shader(Some(background));
             g.set_color(Color::WHITE);
-            g.rectangle(Fill, 0.0, 0.0, cw as f32, ch as f32);
+            g.set_shader(Some(table_blit));
+            g.draw_ex(table, DrawParams::at(0.0, 0.0).scale_xy(cw as f32 / tw as f32, ch as f32 / th as f32));
             g.push_all();
             g.set_shader(Some(pixel));
             g.scale(density, density);
@@ -399,6 +443,29 @@ impl Renderer {
         g.draw_ex(&self.canvas, DrawParams::at(at.x, at.y).scale(self.view.scale / density));
         g.set_shader(None);
     }
+}
+
+/// What the tabletop canvas was drawn for. It's drawn again when any of it changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TableKey {
+    step: f32,
+    visible: [f32; 4],
+}
+
+/// The tabletop's texels that cover the visible part of design space: the first
+/// one's index (counted from design space's origin) and how many across and down.
+fn table_texels(visible: Rect) -> (Vec2, (u32, u32)) {
+    let first = (vec2(visible.x, visible.y) * DENSITY).floor();
+    let last = (vec2(visible.x + visible.w, visible.y + visible.h) * DENSITY).ceil();
+    let size = (last - first).max(Vec2::ONE);
+    (first, (size.x as u32, size.y as u32))
+}
+
+fn new_table_canvas(g: &mut Graphics, w: u32, h: u32) -> Canvas {
+    let canvas = g.new_canvas(w, h);
+    // `table.wgsl` reads whole texels, so no filtering is wanted.
+    canvas.set_filter(FilterMode::Nearest);
+    canvas
 }
 
 fn new_canvas(g: &mut Graphics, w: u32, h: u32) -> Canvas {

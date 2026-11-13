@@ -39,6 +39,7 @@ LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   
 cargo love2drs android run -p cabin-euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
 cargo love2drs ios build -p cabin-euchre                  # on a Mac: builds the .app for the simulator
 EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,0 EUCHRE_RESERVE=24 cargo run   # preview the phone layouts on the desktop, like Android with no bar showing
+LOVE2DRS_FRAME_LOG=1 cargo run   # a line a second: frames, loop wakeups, ms per part of a frame, GPU ms per pass
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
@@ -101,7 +102,7 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
 | `src/scenes/options.rs`, `rules.rs` | modal overlays shared by title and table (`scenes::Overlay`) |
 | `src/scenes/trophies.rs` | the trophy shelf (an overlay on the title: your numbers, then every trophy) and the banner for a new trophy, which the app draws over every scene |
 | `src/render.rs` | 640x360 design space rendered into a canvas at the window's own resolution, tabletop background, lamplight present pass, `View::to_design`. `DENSITY` (1.5) is the pixel art's texels per design pixel |
-| `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
+| `src/shaders/*.wgsl` | `background.wgsl` (walnut table, felt mat, swaying lamp), `table.wgsl` (lays that tabletop over the scene canvas), `pixel.wgsl` (anti-aliased pixel-art sampling for every scene draw) and `lamplight.wgsl` (post-process). Loaded with `include_str!` |
 | `src/text.rs` | hand-authored 5x7 bitmap pixel font (`GLYPHS`) and the `Text` draw builder. One font pixel is `UNIT` (4/3) design px at scale 1 |
 | `src/cards.rs` | procedural pixel-art card atlas (faces, court portraits, back) and white suit icons; `Pose`. Painted at `DENSITY`, drawn at `1/DENSITY`. Atlases are linear-filtered and every quad has a 1-texel transparent border (`cards::bordered`) so `pixel.wgsl` can smooth sprite outlines |
 | `src/suits.rs` | suit shapes: math masks at any size, plus hand-drawn 11 and 13 px masks so small clubs and spades stay distinct |
@@ -336,6 +337,12 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   call `juice::keep_awake()` while it runs, or it plays at 20 fps. Slow ambient motion (wobble, pulses,
   the lamp) is fine at that rate. Use `juice::approach`, not love2drs's, for anything that moves.
   `EUCHRE_FPS_LOG=1` shows what it's doing. Screenshot runs (`EUCHRE_FIXED_DT`) never cap.
+- **The tabletop is drawn 30 times a second** (`render::TABLE_FPS`), into a canvas of one pixel per texel
+  that `table.wgsl` lays over the scene. It's the costliest shader, and nothing in it moves faster than
+  that shows. With `EUCHRE_FIXED_DT=1` it's redrawn on even frames, so compare screenshots of even frames:
+  on an odd one the lamp and dust are a 60th of a second behind the old pictures.
+- **Measure, don't guess:** `LOVE2DRS_FRAME_LOG=1` works in any build. Fewer wakeups, fewer passes and
+  less busy time are all less power.
   Measured on the iPhone Duo (Power Profiler, 3 min each, debug builds): left at a prompt, power impact went
   from 12.0 to about 1.5 (CPU 80% to 9%). With autoplay it went from 15.8 to 4.5, once love2drs stopped iOS
   spinning between frames. To measure: start the game with `xcrun devicectl device process launch -e '{...}'`

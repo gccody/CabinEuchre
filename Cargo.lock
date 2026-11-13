@@ -1179,7 +1179,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "love2drs"
 version = "0.1.0"
-source = "git+https://github.com/gccody/Love2DRS#1ec439c54d0e7bb6186adefd0741321715f7bbce"
+source = "git+https://github.com/gccody/Love2DRS#2cb0fc1e4c5cfbdfb19e4b27df861a034d188bc2"
 dependencies = [
  "ab_glyph",
  "android_logger",

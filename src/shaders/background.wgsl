@@ -4,15 +4,17 @@
 // dust motes drift through the beam.
 //
 // Uniforms:
-//   data[0]    = (time, resolution.x, resolution.y, -)
+//   data[0]    = (time, -, -, -)
 //   data[1..3] = wood dark, wood, wood light
 //   data[4..6] = felt deep, felt, felt glow
 //   data[7]    = lamp tint
 //   data[8]    = the design-space rect the canvas shows (x, y, w, h): 640x360 on
 //                a desktop, the whole screen on a phone
+//   data[9].xy = the texel the target's first pixel is (render::table_texels)
 //
-// Drawn as one full-canvas rectangle, so `uv` is ignored and `screen` is the
-// canvas pixel position.
+// Drawn as one rectangle over a canvas with one pixel per texel, so `uv` is
+// ignored and `screen` picks the texel. render.rs stretches that canvas over the
+// big one.
 
 // Texels per design pixel (render::DENSITY).
 const DENSITY = 1.5;
@@ -36,7 +38,6 @@ fn round_rect(p: vec2<f32>, half: vec2<f32>, r: f32) -> f32 {
 
 fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, screen: vec2<f32>) -> vec4<f32> {
     let time = uniforms.data[0].x;
-    let res = uniforms.data[0].yz;
     let wood_dark = uniforms.data[1].rgb;
     let wood_mid = uniforms.data[2].rgb;
     let wood_light = uniforms.data[3].rgb;
@@ -47,8 +48,8 @@ fn effect(color: vec4<f32>, t: texture_2d<f32>, s: sampler, uv: vec2<f32>, scree
 
     let view = uniforms.data[8];
 
-    // Snap to the pixel-art texel grid so the table is as chunky as the cards.
-    let tex = floor((screen / res * view.zw + view.xy) * DENSITY);
+    // One pixel per texel of the pixel-art grid, so the table is as chunky as the cards.
+    let tex = floor(screen) + uniforms.data[9].xy;
     let p = (tex + vec2<f32>(0.5)) / DENSITY;
     // On a phone the design space can start left of the canvas. Whole dither
     // periods keep the grid's indices positive without changing the pattern.
