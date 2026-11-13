@@ -1179,7 +1179,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 [[package]]
 name = "love2drs"
 version = "0.1.0"
-source = "git+https://github.com/gccody/Love2DRS#35b637c1210b67bd08bbe9274111879d5707c9b0"
+source = "git+https://github.com/gccody/Love2DRS#298e605ca96762c9a8e6a6d74e680c2e14b957e6"
 dependencies = [
  "ab_glyph",
  "android_logger",
@@ -1199,6 +1199,7 @@ dependencies = [
  "pollster",
  "rodio",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
