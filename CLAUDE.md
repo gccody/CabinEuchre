@@ -363,6 +363,9 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   (debug switches as JSON) and record it with `xcrun xctrace record --template "Power Profiler" --device UDID
   --attach PID`. Run both from the GUI session (the signing note below), and keep Xcode open: Instruments
   only sees the phone while it is. The phone charges over USB, so read the per-process impact, not battery %.
+  On a Mac over SSH, start the game as a `launchctl bootstrap gui/...` job with `ProcessType` set to `Interactive`: macOS
+  stretches a plain job's timers, and the idle game then draws 9 frames a second, not 20. Take CPU from `ps` times over
+  a run (`ps -M` for the main thread). `sample` ticks in step with the frames and overstates whatever it lands on.
 - **Every control is reachable without a mouse.** New buttons need a place in their scene's
   focus order and a `nav` path to them.
 - **Sound**: every interaction makes a sound. Add variants to `sfx::Sound` and play them via
