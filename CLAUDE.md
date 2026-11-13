@@ -39,7 +39,7 @@ LOVE2DRS_SCREENSHOT=target/shots/x.png LOVE2DRS_SCREENSHOT_FRAME=60 cargo run   
 cargo love2drs android run -p cabin-euchre --abi x86_64   # build, install and start on an emulator (needs cargo-love2drs)
 cargo love2drs ios build -p cabin-euchre                  # on a Mac: builds the .app for the simulator
 EUCHRE_MOBILE=1 EUCHRE_WINDOW=1280x590 EUCHRE_SAFE=50,0,50,0 EUCHRE_RESERVE=24 cargo run   # preview the phone layouts on the desktop, like Android with no bar showing
-LOVE2DRS_FRAME_LOG=1 cargo run   # a line a second: frames, loop wakeups, ms per part of a frame, GPU ms per pass
+LOVE2DRS_FRAME_LOG=1 cargo run   # a line a second: frames, loop wakeups, the process's CPU, ms per part of a frame, GPU ms per pass
 ```
 
 After any visual change, capture a screenshot and look at it. Scenes animate, so try a couple
@@ -306,6 +306,9 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   `docs/support.html` are published with GitHub Pages from `docs/`.
 - **Signing over SSH:** `codesign` fails with `errSecInternalComponent`, because the keychain is locked for SSH sessions.
   Bootstrap the build as a temporary job with `launchctl bootstrap gui/$(id -u) job.plist` while someone's logged in on the Mac.
+- **120 Hz on iPhone.** love2drs draws iOS frames from a display link that asks for the screen's full rate, and
+  `cargo love2drs` writes `CADisableMinimumFrameDurationOnPhone` into `Info.plist`. Without both, iOS shows 60 frames
+  a second. Under the idle cap the link is paused, so the screen can slow down too. Checked on the Duo: 120 in play.
 - **Sound** is left to the framework: it pauses in the background and after an interruption, and it comes back
   by itself. On iOS it mixes with the player's music and obeys the silent switch (`AudioSession::Ambient`).
 - **Graphics:** Android uses Vulkan where there's a driver and OpenGL ES 3 otherwise. To test GLES, start an
@@ -366,6 +369,10 @@ shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you disca
   On a Mac over SSH, start the game as a `launchctl bootstrap gui/...` job with `ProcessType` set to `Interactive`: macOS
   stretches a plain job's timers, and the idle game then draws 9 frames a second, not 20. Take CPU from `ps` times over
   a run (`ps -M` for the main thread). `sample` ticks in step with the frames and overstates whatever it lands on.
+  Instruments lists a phone as offline when Xcode has no device support for its iOS version, which happens after the
+  phone updates. The frame log's `cpu` (the whole process, as a share of a core) still works then: start the game with
+  `xcrun devicectl device process launch --console -e '{"LOVE2DRS_FRAME_LOG":"1",...}'` and the lines come back on
+  stdout. On the Duo at 120 Hz (debug build) that's 29% with autoplay and 7% left at a prompt.
 - **Every control is reachable without a mouse.** New buttons need a place in their scene's
   focus order and a `nav` path to them.
 - **Sound**: every interaction makes a sound. Add variants to `sfx::Sound` and play them via
