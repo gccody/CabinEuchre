@@ -78,6 +78,8 @@ These only work in debug builds, except `EUCHRE_SERVER`, which any build reads. 
 environment variables on a phone, so debug builds there also read `KEY=value` lines
 from `euchre-debug.txt` in the save directory (Android: `files/`, via `adb shell run-as`; iOS: the app
 container's `Documents/`). The lobby's `[euchre] seated at table` line goes to logcat on Android.
+`LOVE2DRS_FRAME_LOG` is the framework's, so it isn't read from that file: an empty file named
+`love2drs-frame-log` next to it turns the frame log on (logcat on Android, the system log on iOS).
 
 Example: `EUCHRE_FIXED_DT=1 EUCHRE_SCENE=table EUCHRE_SEED=15 EUCHRE_AUTOPLAY=1 LOVE2DRS_SCREENSHOT=target/shots/bid.png LOVE2DRS_SCREENSHOT_FRAME=340 cargo run`
 shows your order-up prompt. Seed 15 has you bid in both rounds, 24 has you discard as dealer,
